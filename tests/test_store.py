@@ -1,14 +1,37 @@
 import asyncio
 import os
 import re
+import sqlite3
 import time
 import uuid
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
 from webhooks_mcp.constants import EVENT_TTL, MAX_EVENTS_PER_NAME
 from webhooks_mcp.store import EventStore, is_valid_event_name
+
+
+class SlowInsertDb:
+    """Delays event inserts so a test can cancel the caller while the worker thread runs."""
+
+    def __init__(self, real):
+        self._real = real
+
+    def execute(self, sql, *args):
+        if sql.startswith("INSERT INTO events"):
+            time.sleep(0.2)
+        return self._real.execute(sql, *args)
+
+    def __enter__(self):
+        return self._real.__enter__()
+
+    def __exit__(self, *exc):
+        return self._real.__exit__(*exc)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
 
 
 async def test_insert_assigns_increasing_seq_and_uuid(store):
@@ -130,7 +153,7 @@ def test_event_name_validation():
 async def test_open_fails_when_parent_is_not_a_directory(tmp_path):
     blocker = tmp_path / "file"
     blocker.write_text("x")
-    with pytest.raises(Exception):  # noqa: B017 - sqlite3.OperationalError or OSError
+    with pytest.raises((sqlite3.OperationalError, OSError)):
         await EventStore(blocker / "events.db").open()
 
 
@@ -138,5 +161,66 @@ async def test_open_fails_when_parent_is_not_a_directory(tmp_path):
 async def test_open_fails_on_unwritable_path(tmp_path):
     ro = tmp_path / "ro"
     ro.mkdir(mode=0o500)
-    with pytest.raises(Exception):  # noqa: B017 - sqlite3.OperationalError or OSError
+    with pytest.raises((sqlite3.OperationalError, OSError)):
         await EventStore(ro / "events.db").open()
+
+
+async def test_payload_bytes_counts_utf8_bytes(store):
+    e, _ = await store.insert("a.b", '"é€"', None, None)
+    assert e.payload_bytes == 7
+
+
+async def test_open_requires_wal(tmp_path):
+    with pytest.raises(sqlite3.OperationalError, match="wal"):
+        await EventStore(Path(":memory:")).open()
+
+
+async def test_unopened_store_raises_clear_error(tmp_path):
+    with pytest.raises(RuntimeError, match="not open"):
+        await EventStore(tmp_path / "x.db").names()
+
+
+@pytest.mark.parametrize("label", ["Bad Label", "a" * 200, "x/y"])
+async def test_mint_rejects_label_that_makes_invalid_name(store, label):
+    with pytest.raises(ValueError):
+        await store.mint(label)
+
+
+async def test_sweep_keeps_rows_exactly_at_ttl(store, clock):
+    await store.insert("a.b", "1", None, None)
+    m = await store.mint("x")
+    clock.advance(EVENT_TTL)
+    await store.sweep()
+    assert len(await store.list("a.b", 0, 10)) == 1
+    assert await store.is_minted_active(m.event_name)
+
+
+async def test_cancelled_insert_does_not_break_single_writer(store):
+    store._db = SlowInsertDb(store._db)
+    first = asyncio.create_task(store.insert("a.b", "1", None, "k"))
+    await asyncio.sleep(0.05)
+    first.cancel()
+    second, _ = await store.insert("a.b", "1", None, "k")
+    assert len(await store.list("a.b", 0, 10)) == 1
+    assert (await store.list("a.b", 0, 10))[0].event_id == second.event_id
+
+
+async def test_waiter_woken_when_inserting_task_cancelled_after_commit(store):
+    store._db = SlowInsertDb(store._db)
+    waiter = asyncio.create_task(store.wait("a.b", 0, 5))
+    await asyncio.sleep(0.02)
+    inserter = asyncio.create_task(store.insert("a.b", "1", None, None))
+    await asyncio.sleep(0.05)
+    inserter.cancel()
+    got = await asyncio.wait_for(waiter, 2)
+    assert [e.payload for e in got] == [1]
+
+
+async def test_failed_sweep_rolls_back_partial_deletes(store, clock, monkeypatch):
+    await store.insert("old.e", "1", None, None)
+    clock.advance(EVENT_TTL + timedelta(seconds=1))
+    monkeypatch.setattr("webhooks_mcp.store.MAX_EVENTS_PER_NAME", object())
+    with pytest.raises(sqlite3.Error):
+        await store.sweep()
+    await store.mint("later")  # an unrelated commit must not persist the half-done sweep
+    assert len(await store.list("old.e", 0, 10)) == 1
