@@ -351,7 +351,7 @@ Read this section first when picking the work up in a fresh context.
 
 **Where things stand.** Design **approved by the owner (2026-11-11)**. Implementation plans are in
 `docs/superpowers/plans/`: `2026-11-11-orchestration.md` (start there — it holds the status table and
-the one open decision, D1) and `2026-11-11-webhooks-mcp-listener.md`.
+the merge rules; no decision is open) and `2026-11-11-webhooks-mcp-listener.md`.
 No code exists in any repo. Work branch in all three repos: `claude/webhook-listener-mcp-ltjc1r`
 (xstockstrat PRs target `main-dev`, the other two `main`). This document is PR #1 of `webhooks-mcp`.
 
