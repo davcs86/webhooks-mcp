@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from webhooks_mcp.constants import EVENT_TTL, MAX_EVENTS_PER_NAME
+from webhooks_mcp.constants import EVENT_TTL, MAX_EVENTS_PER_NAME, ROW_OVERHEAD_BYTES
 from webhooks_mcp.store import EventStore, is_valid_event_name
 
 
@@ -267,7 +267,10 @@ async def test_close_waits_for_an_in_flight_insert_of_a_cancelled_caller(tmp_pat
 
 
 def _real_total(s: EventStore) -> int:
-    return s._db.execute("SELECT COALESCE(SUM(payload_bytes), 0) FROM events").fetchone()[0]
+    payload, rows = s._db.execute(
+        "SELECT COALESCE(SUM(payload_bytes), 0), COUNT(*) FROM events"
+    ).fetchone()
+    return payload + ROW_OVERHEAD_BYTES * rows
 
 
 async def test_per_name_cap_holds_on_insert_without_sweep(store, monkeypatch):
@@ -283,12 +286,24 @@ async def test_per_name_cap_holds_on_insert_without_sweep(store, monkeypatch):
 
 
 async def test_global_byte_budget_evicts_oldest_first(store, monkeypatch):
-    monkeypatch.setattr("webhooks_mcp.store.MAX_STORE_BYTES", 100)
+    budget = 3 * (30 + ROW_OVERHEAD_BYTES) + 10
+    monkeypatch.setattr("webhooks_mcp.store.MAX_STORE_BYTES", budget)
     payload = '"' + "x" * 28 + '"'  # 30 bytes
     inserted = [(await store.insert(f"n{i % 3}.e", payload, None, None))[0] for i in range(10)]
-    assert _real_total(store) <= 100
+    assert _real_total(store) <= budget
     remaining = [e.seq for name in ("n0.e", "n1.e", "n2.e") for e in await store.list(name, 0, 20)]
     assert sorted(remaining) == [e.seq for e in inserted[-3:]]
+
+
+async def test_budget_charges_a_fixed_overhead_per_row(store, monkeypatch):
+    budget = 10 * (1 + ROW_OVERHEAD_BYTES)
+    monkeypatch.setattr("webhooks_mcp.store.MAX_STORE_BYTES", budget)
+    for i in range(50):
+        newest, _ = await store.insert(f"n{i:03d}.e", "1", None, f"{i:03d}" + "k" * 252)
+    rows = store._db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    assert rows <= budget // (1 + ROW_OVERHEAD_BYTES)
+    assert await store.get(newest.event_id) is not None
+    assert store._total_bytes == _real_total(store) <= budget
 
 
 async def test_newest_event_survives_even_when_larger_than_budget(store, monkeypatch):
@@ -301,7 +316,8 @@ async def test_newest_event_survives_even_when_larger_than_budget(store, monkeyp
 
 async def test_running_total_tracks_real_sum(tmp_path, clock, monkeypatch):
     monkeypatch.setattr("webhooks_mcp.store.MAX_EVENTS_PER_NAME", 4)
-    monkeypatch.setattr("webhooks_mcp.store.MAX_STORE_BYTES", 200)
+    budget = 5 * (32 + ROW_OVERHEAD_BYTES)
+    monkeypatch.setattr("webhooks_mcp.store.MAX_STORE_BYTES", budget)
     path = tmp_path / "total.db"
     s = EventStore(path, clock)
     await s.open()
@@ -313,12 +329,12 @@ async def test_running_total_tracks_real_sum(tmp_path, clock, monkeypatch):
         assert s._total_bytes == _real_total(s) > 0
         for i in range(12):
             await s.insert(f"x{i}.e", '"' + "y" * 30 + '"', None, None)
-        assert s._total_bytes == _real_total(s) <= 200
+        assert s._total_bytes == _real_total(s) <= budget
         clock.advance(EVENT_TTL / 2)
         await s.insert("late.e", "7", None, None)
         clock.advance(EVENT_TTL / 2 + timedelta(seconds=1))
         await s.sweep()
-        assert s._total_bytes == _real_total(s) == 1
+        assert s._total_bytes == _real_total(s) == 1 + ROW_OVERHEAD_BYTES
         await s.insert("b.c", "22", None, None)
         expected = _real_total(s)
     finally:
@@ -326,7 +342,7 @@ async def test_running_total_tracks_real_sum(tmp_path, clock, monkeypatch):
     reopened = EventStore(path, clock)
     await reopened.open()
     try:
-        assert reopened._total_bytes == expected == 3
+        assert reopened._total_bytes == expected == 3 + 2 * ROW_OVERHEAD_BYTES
     finally:
         await reopened.close()
 
@@ -336,7 +352,7 @@ async def test_failed_insert_leaves_running_total_unchanged(store, monkeypatch):
     monkeypatch.setattr("webhooks_mcp.store.MAX_EVENTS_PER_NAME", object())
     with pytest.raises(sqlite3.Error):
         await store.insert("a.b", "22", None, None)
-    assert store._total_bytes == _real_total(store) == 1
+    assert store._total_bytes == _real_total(store) == 1 + ROW_OVERHEAD_BYTES
 
 
 async def test_new_database_uses_incremental_auto_vacuum(store):

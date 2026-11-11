@@ -19,6 +19,7 @@ from webhooks_mcp.constants import (
     MAX_EVENTS_PER_NAME,
     MAX_STORE_BYTES,
     MINTED_PREFIX,
+    ROW_OVERHEAD_BYTES,
     WAIT_RESULT_LIMIT,
 )
 
@@ -92,7 +93,9 @@ def _event(row: tuple) -> Event:
 
 
 def _sum_bytes(db: sqlite3.Connection) -> int:
-    return db.execute("SELECT COALESCE(SUM(payload_bytes), 0) FROM events").fetchone()[0]
+    return db.execute(
+        "SELECT COALESCE(SUM(payload_bytes), 0) + ? * COUNT(*) FROM events", (ROW_OVERHEAD_BYTES,)
+    ).fetchone()[0]
 
 
 def _trim_name(db: sqlite3.Connection, event_name: str) -> int:
@@ -107,7 +110,7 @@ def _trim_name(db: sqlite3.Connection, event_name: str) -> int:
         "DELETE FROM events WHERE event_name = ? AND seq <= ?",
         (event_name, max(s for s, _ in over)),
     )
-    return sum(size for _, size in over)
+    return sum(size + ROW_OVERHEAD_BYTES for _, size in over)
 
 
 def _evict_oldest(db: sqlite3.Connection, keep_seq: int, excess: int) -> int:
@@ -118,7 +121,7 @@ def _evict_oldest(db: sqlite3.Connection, keep_seq: int, excess: int) -> int:
         "SELECT seq, payload_bytes FROM events WHERE seq < ? ORDER BY seq", (keep_seq,)
     )
     for seq, size in cur:
-        freed, last = freed + size, seq
+        freed, last = freed + size + ROW_OVERHEAD_BYTES, seq
         if freed >= excess:
             break
     cur.close()
@@ -136,7 +139,7 @@ class EventStore:
         self._write_lock = threading.Lock()
         self._cond = asyncio.Condition()
         self._inflight: set[asyncio.Future] = set()
-        # Sum of payload_bytes over all events; read and written only under the write lock.
+        # Sum over events of payload_bytes + ROW_OVERHEAD_BYTES; touched only under the write lock.
         self._total_bytes = 0
 
     async def open(self) -> None:
@@ -217,7 +220,7 @@ class EventStore:
                 (event_id, event_name, payload_json, size, received_at, source_ip, idempotency_key),
             )
             seq = cur.lastrowid
-            delta = size - _trim_name(db, event_name)
+            delta = size + ROW_OVERHEAD_BYTES - _trim_name(db, event_name)
             delta -= _evict_oldest(db, seq, self._total_bytes + delta - MAX_STORE_BYTES)
             event = Event(seq, event_id, event_name, None, size, received_at, source_ip)
             return event, False, delta

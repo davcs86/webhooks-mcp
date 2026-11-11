@@ -66,8 +66,9 @@ fetched with `get_event`. Pass `next_after_seq` back as `after_seq` to page. Rea
 ## Retention
 
 Events and minted names live 7 days. Two bounds are enforced on every insert, evicting oldest
-first: each event name keeps at most 1000 events, and the store as a whole holds at most 1 GiB of
-payload (sum of `payload_bytes`), deleting the globally oldest events until it fits. The event just
+first: each event name keeps at most 1000 events, and the store as a whole stays within a 1 GiB
+budget, deleting the globally oldest events until it fits. The budget charges each event its
+`payload_bytes` plus a fixed 1 KiB per-row overhead, so many tiny events cannot outgrow it on disk. The event just
 stored is never evicted by its own insert. Cursors stay valid: `seq` values are never reused, so an
 evicted event simply no longer appears after `after_seq`. A sweep runs at start and hourly to expire
 old events and minted names and to return freed space to the filesystem (for a database file first

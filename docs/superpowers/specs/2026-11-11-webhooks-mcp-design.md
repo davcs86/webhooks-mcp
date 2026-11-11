@@ -169,7 +169,8 @@ SQLite in WAL mode on a volume at `/data`.
 
 Constants in one module: `EVENT_TTL = 7 days`, `MAX_BODY_BYTES = 256 KiB`,
 `MAX_EVENTS_PER_NAME = 1000`, `INLINE_PAYLOAD_BYTES = 4 KiB`, `WAIT_MAX_SECONDS = 25`.
-`MAX_STORE_BYTES = 1 GiB` (sum of payload sizes), `LIST_NAMES_LIMIT = 500`,
+`MAX_STORE_BYTES = 1 GiB` (each event charged its payload size plus `ROW_OVERHEAD_BYTES = 1 KiB`),
+`LIST_NAMES_LIMIT = 500`,
 `INGEST_MAX_CONCURRENT_REQUESTS = 32`.
 
 Bounds are enforced **on insert**, oldest first, in the same transaction: a name never holds more than
