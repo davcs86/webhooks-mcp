@@ -101,7 +101,10 @@ docker run -d --name wm --read-only --cap-drop ALL --security-opt no-new-privile
 
 ## Release
 
-Merging to `main` makes CI push `ghcr.io/davcs86/webhooks-mcp:<sha>` and print the digest in the job
-summary; deployments pin `ghcr.io/davcs86/webhooks-mcp@sha256:…`.
+Merging to `main` publishes `ghcr.io/davcs86/webhooks-mcp:<sha>` and prints the digest
+(`ghcr.io/davcs86/webhooks-mcp@sha256:…`) in the CI job summary. Deployments pin that digest.
+
+GHCR creates the package private on first push. The repo owner must set it to public once, because the
+edge pulls it without a credential.
 
 MIT licensed.
