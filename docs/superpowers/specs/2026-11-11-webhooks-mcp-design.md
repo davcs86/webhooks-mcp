@@ -41,7 +41,7 @@ tools. It is deliberately generic — xstockstrat is the first publisher, not th
 - The ingestion port is reachable from the public internet.
 - The MCP bearer key appears in a log, a commit, or the repo.
 - A webhook payload is presented to an agent as anything other than untrusted data.
-- A lost or duplicated relay delivery goes unnoticed (no retry, no dedup, no dead-letter signal).
+- A lost or duplicated webhook delivery goes unnoticed (no retry, no dedup, no dead-letter signal).
 
 ## 3. Constraints found in the code
 
@@ -52,8 +52,8 @@ tools. It is deliberately generic — xstockstrat is the first publisher, not th
 | Edge has no database; `tag:edge` is denied the shared Postgres; droplet is 1 vCPU / 2 GB | `policy/policy.hujson`, `group_vars/all/main.yml` |
 | Homelab prod reaches the edge on 443, homelab staging only on 8443 — both grants already exist | `policy/policy.hujson` |
 | Every image pinned by digest with a rationale in `docs/versions.md`; generated secrets via `init-secrets` `fill_missing` | `homelab-edge/CLAUDE.md` rules 3–4, `docs/decisions.md` |
-| xstockstrat has no generic outbound webhook; ledger `StreamEvents` is cursorable (`from_sequence`) | `ledger.proto`, `notify/src/fanout/fanout.ts` |
-| `trigger_backfill` is the async job agents poll; ingest already writes `ingest.backfill.*` ledger events | `ingest/app/handlers/servicer.py` |
+| xstockstrat has no generic outbound webhook; notify's Slack/SendGrid fanout is best-effort (no retry, no delivery log) | `notify/src/fanout/fanout.ts` |
+| `trigger_backfill` is the async job agents poll; a PARTIAL job reports as `ingest.backfill.completed` | `ingest/app/handlers/servicer.py` |
 | New xstockstrat capability must go through the SDD pipeline; changing `trigger_backfill` must update the `strat-lab` `backtest` skill in the same PR | `xstockstrat/CLAUDE.md` |
 
 ## 4. Approaches considered
@@ -62,18 +62,25 @@ tools. It is deliberately generic — xstockstrat is the first publisher, not th
 inside the service (deferred to shared OIDC), delegating auth to xstockstrat identity (not standalone),
 Postgres (unreachable from the edge), code living in `homelab-edge` (owner chose its own repo + GHCR).
 
-**xstockstrat relay.** Three were weighed:
+**xstockstrat publisher.** Where delivery lives:
 
 | | Approach | Trade-off |
 |---|---|---|
-| A | Relay inside `xstockstrat-ingest`, tailing its own backfill events | Smallest; backfill-only, next event type needs another relay |
-| **B** | **Generic relay in `xstockstrat-notify`: any ledger event carrying a `callback_url` is delivered** | **More to build once; every later async job gets webhooks by stamping one field. Notify already owns outbound HTTP and a direct DB connection** |
+| A | Delivery inside `xstockstrat-ingest` | Smallest; backfill-only, the next publisher re-implements retries |
+| **B** | **Generic delivery in `xstockstrat-notify`** | **Built once; any service gets webhooks by calling one RPC. Notify already owns outbound HTTP and a direct DB connection** |
 | C | New `xstockstrat-webhooks` service | Cleanest isolation; costs a 14th image, a DB pool slot, an mTLS cert, platform-lead approval |
 
-Notify has outbound HTTP and a direct DB connection today but **no ledger client**: B adds a new
-notify → ledger dependency edge, to be recorded in the dependency list in `xstockstrat/CLAUDE.md`.
-
 **Owner picked B.**
+
+How events reach notify, within B:
+
+| | Source | Trade-off |
+|---|---|---|
+| B1 | Notify tails ledger `StreamEvents` for events stamped with a `callback_url` | Publisher only stamps a field; but adds a notify → ledger edge (a dependency loop), makes notify read every ledger event, and inherits ingest's best-effort ledger write |
+| **B2** | **Publisher calls a dedicated notify RPC, `FanoutWebhook`; notify queues and delivers** | **No ledger involvement; the publisher must retry the hand-off itself** |
+| B3 | Reuse `EmitAlert` | Every webhook would land in alert history, the UI stream and push fanout; a clean backfill emits no alert today |
+
+**Owner picked B2**, with the hand-off from ingest queued and retried (section 8).
 
 ## 5. Owner decisions
 
@@ -83,10 +90,12 @@ notify → ledger dependency edge, to be recorded in the dependency list in `xst
 2. `event_name` is primarily a shared event type; minted URLs get their own unique name.
 3. Ingestion: no authentication, behind Caddy, tailnet-only.
 4. Pull-only for agents.
-5. Relay approach B, with `callback_url` on backfills, in scope.
+5. Delivery in notify (approach B) through a dedicated `FanoutWebhook` RPC — not a ledger tail, to
+   avoid a notify ↔ ledger loop. `callback_url` on backfills, in scope. Ingest queues the hand-off and
+   retries it until notify acknowledges.
 6. MCP is public; ingestion is internal.
 7. SQLite, replayable reads, no backup; TTL is a named constant.
-8. Own repo `davcs86/webhooks-mcp`, GHCR image pinned by digest, Python.
+8. Own repo `davcs86/webhooks-mcp`, public GHCR image pinned by digest, Python.
 9. Light schema: `event_name` + schemaless `payload`.
 10. Hostnames live under the homelab domain.
 
@@ -177,8 +186,8 @@ Reads never delete: an event can be read any number of times until it expires.
 - `Dockerfile`: `python:3.13-slim` pinned by digest, `uv sync --frozen`, non-root user, works with a
   read-only root filesystem (only `/data` writable).
 - CI on every PR: `ruff`, `pytest`, image build. On `main`: push `ghcr.io/davcs86/webhooks-mcp` and
-  print the digest. The package is **public** so the droplet pulls it without a registry credential
-  **(call — needs owner confirmation; the alternative is a pull token on the edge)**.
+  print the digest. The package is **public** (owner decision), so the droplet pulls it without a
+  registry credential.
 - Tests are written first and cover: the ingestion table in 6.2, idempotent repeat, minted
   lifecycle (mint → post → expire → 404), cursor pagination, `wait_for_event` waking on insert and
   timing out, TTL and per-name trimming, 401 without or with a wrong key, and the ingest routes being
@@ -222,75 +231,90 @@ Changes:
 
 No policy change: `xstockstrat → edge:443` and `xstockstrat-staging → edge:8443` already exist.
 
-One instance serves both environments, so prod and staging events share a store. The relay puts
+One instance serves both environments, so prod and staging events share a store. The publisher puts
 `environment` in every payload (section 8.3) so an agent can tell them apart.
 
 ## 8. The publisher (`davcs86/xstockstrat`)
 
 This is a new capability, so it enters through `/sdd-story` → `/sdd-design quick` before code. This
-section is the input to that pipeline, not a substitute for it. Governance it triggers: proto change
-(additive), new config keys, DB migrations in ingest and notify. No new service.
+section is the input to that pipeline, not a substitute for it. Governance it triggers: proto changes
+(additive, in `ingest.proto` and `notify.proto`), new config keys, DB migrations in ingest and notify.
+No new service, no new dependency edge (ingest → notify exists already), no ledger change.
 
-### 8.1 `callback_url` on backfills
+Two queues give at-least-once end to end: ingest retries the hand-off until notify acknowledges; notify
+retries the HTTP delivery until the listener acknowledges. Duplicates are collapsed by idempotency keys
+at each hop.
+
+```
+ingest job row ──sweep──▶ notify.FanoutWebhook ──row──▶ delivery worker ──POST──▶ webhooks-mcp
+ (enqueued flag)            (acks after persist)        (backoff, dead-letter)     (Idempotency-Key)
+```
+
+### 8.1 `callback_url` on backfills (ingest)
 
 - `TriggerBackfillRequest` gains an optional `callback_url`; the agent tool `trigger_backfill` exposes
   it. The `strat-lab` `backtest` skill is updated in the same PR.
-- Ingest stores it on the job and stamps `callback_url` into the **metadata** of the job's **terminal**
-  ledger events only. Ingest does not set `AppendEventRequest.metadata` today, so this is a new write
-  path.
-- There is no "partial" event: a PARTIAL job emits `ingest.backfill.completed` and the payload carries
-  only `failed_symbols`. The terminal event payload gains a `status` field (the `BackfillStatus` name)
-  **(call)** so an agent can tell a clean run from a partial one.
-- **Open — owner decision (see hand-over):** ingest's ledger write is best-effort today
-  (`_emit_backfill_event` swallows errors). An append that fails means no webhook, silently.
-- The URL must be `https` and its origin (host and port) must be on an allowlist held in config. The agent supplies this
-  URL, so the allowlist is the SSRF control. The relay enforces it on every delivery; rejecting a bad
-  URL at trigger time as well is wanted for a clear error. Where the single allowlist key lives so
-  both services read one source is left to the SDD design.
-- The allowlist is empty by default, so the DigitalOcean deployments reject `callback_url` outright.
+- Ingest stores it on the job, with a "webhook enqueued at" marker (migration).
+- When a job with a `callback_url` reaches a terminal state, ingest calls `FanoutWebhook` and sets the
+  marker on acknowledgement. A periodic sweep retries terminal jobs whose marker is unset, so notify
+  being down when a backfill finishes delays the webhook rather than losing it.
+- The hand-off must not fail or slow the backfill itself: a failed call is left to the sweep.
+- Ledger events are unchanged — audit only, no `callback_url` stamped on them.
 
-### 8.2 Relay in `xstockstrat-notify`
+### 8.2 `FanoutWebhook` and delivery (notify)
 
-A fourth dispatcher beside the Slack/SendGrid and Web Push ones, but durable rather than best-effort:
+New unary RPC on `NotifyService`:
 
-1. **Tail.** Subscribe to ledger `StreamEvents` from one cursor persisted in notify's schema, with no
-   type filter, and discard events without a `callback_url` in notify **(call)**. `StreamEvents`
-   matches a single exact `event_type`, so filtering upstream would need one stream and cursor per type
-   (breaking the single transaction below) or a ledger proto change. One unfiltered tail keeps one
-   cursor and touches no third service; the cost is that notify reads every ledger event.
-2. **Enqueue.** For each event whose metadata has `callback_url`, insert a delivery row (unique on the
-   ledger `event_id`) and advance the cursor in the same transaction. A crash between the two cannot
-   lose or double-enqueue an event.
-3. **Deliver.** A worker POSTs pending rows with exponential backoff. 2xx is success. 408, 429, 5xx and
+| Field | Meaning |
+|---|---|
+| `callback_url` | Target |
+| `event_name` | Dotted name, e.g. `ingest.backfill.completed` |
+| `payload` | Struct — the publisher's data |
+| `idempotency_key` | Unique per logical event; ingest sends `backfill:<job_id>:<status>` **(call)** |
+
+1. **Accept.** Validate the URL (below), insert a delivery row unique on `idempotency_key`, then
+   acknowledge. A repeat with a known key acknowledges without a second row. A rejected URL is
+   `INVALID_ARGUMENT` — the publisher must not retry it.
+2. **Deliver.** A worker POSTs pending rows with exponential backoff. 2xx is success. 408, 429, 5xx and
    network errors are retried; any other 4xx is dead at once. After the last attempt the row is marked
    dead and a WARNING alert is emitted, so a lost delivery is visible.
-4. **One slow target must not block others** — retries are per row, not head-of-line.
+3. **One slow target must not block others** — retries are per row, not head-of-line.
+4. **Survives restart.** Pending rows are picked up again on start; the queue is the table, not memory.
+
+**URL rule.** `https` only, and the origin (host and port) must be on an allowlist held in a notify
+config key. The agent supplies this URL, so the allowlist is the SSRF control; notify is the single
+enforcement point, both on accept and on every delivery. The allowlist is empty by default, so the
+DigitalOcean deployments reject every `callback_url`. Ingest surfaces the rejection: `trigger_backfill`
+with a disallowed URL should fail up front rather than at job end — how ingest learns the verdict
+early (a validate-only call, or a shared key) is left to the SDD design.
+
+`FanoutWebhook` is callable by internal services only, like `EmitAlert`; whether it needs an
+`x-internal-caller` allow-list is left to the SDD design.
 
 Notify stays on its existing single direct DB connection; the pool budget table does not change. The
-relay assumes a single notify instance, as today.
+worker assumes a single notify instance, as today.
 
 ### 8.3 Wire format
 
 ```
 POST <callback_url>
 Content-Type: application/json
-Idempotency-Key: <ledger event_id>
+Idempotency-Key: <idempotency_key>
 
 {
   "event_name": "ingest.backfill.completed",
   "payload": {
-    "event_id": "<ledger event_id>",
-    "sequence": 12345,
-    "stream_key": "backfill:<job_id>",
-    "occurred_at": "...",
     "source_service": "xstockstrat-ingest",
     "environment": "production | staging",
-    "correlation_id": "...",
-    "data": { ...the ledger event payload... }
+    "occurred_at": "...",
+    "data": { "job_id": "...", "status": "COMPLETED | PARTIAL | FAILED | CANCELED", ... }
   }
 }
 ```
 
+Notify builds the envelope (`source_service`, `environment`, `occurred_at`) around the publisher's
+`payload`, which becomes `data` **(call)**. There is no "partial" event name: a PARTIAL job is
+`ingest.backfill.completed` with `status: PARTIAL`, so `status` is required in the backfill data.
 `user_id` and other identity fields are not sent. The same body works against both listener endpoints:
 `/hooks` reads `event_name` from it, a minted URL stores it whole.
 
@@ -301,14 +325,14 @@ Idempotency-Key: <ledger event_id>
 3. Later, agent calls `wait_for_event("minted.backfill-x7k2…")` and gets the terminal event.
 
 Or, without minting: pass `https://webhooks.ts.<domain>/hooks` and query
-`list_events("ingest.backfill.completed")`, matching on `payload.stream_key`.
+`list_events("ingest.backfill.completed")`, matching on `payload.data.job_id`.
 
 ## 9. Order of work
 
 1. `webhooks-mcp`: service, tests, CI, first image digest.
 2. `homelab-edge`: deploy and verify (routing test, Gatus, a manual POST over the tailnet, Claude.ai
    connector added with the bearer header).
-3. `xstockstrat`: SDD feature for `callback_url` + relay; verified on homelab staging against the live
+3. `xstockstrat`: SDD feature for `callback_url` + `FanoutWebhook`; verified on homelab staging against the live
    listener via 8443.
 
 Each step is usable on its own: after step 2 any tailnet service can already publish.
@@ -316,7 +340,8 @@ Each step is usable on its own: after step 2 any tailnet service can already pub
 ## 10. Left to the builder
 
 - Module layout, SQLite access library, how the two listeners are started in one process.
-- Exact retry schedule and attempt count for the relay (config keys, seeded by migration).
+- Exact retry schedule and attempt count for notify's delivery worker and the interval of ingest's
+  sweep (config keys, seeded by migration).
 - Names of the new xstockstrat config keys, tables and the SDD slug.
 - Caddy rate-limit values for the ingest host.
 
@@ -330,13 +355,9 @@ No code exists in any repo. Work branch in all three repos: `claude/webhook-list
 
 **Open owner decisions — do not guess these.**
 
-1. **Owner redirected the relay source (2026-11-11): "use notify instead" of the ledger tail, to avoid
-   a notify ↔ ledger circular dependency.** Sections 4 (approach B), 8.1–8.3 still describe the ledger
-   tail and are **superseded** on that point; they are rewritten once the owner confirms the shape:
-   ingest hands the webhook to notify through a dedicated notify RPC, notify persists it and owns
-   retries, no ledger client in notify. Pending confirmation: dedicated RPC vs. reusing `EmitAlert`,
-   and whether ingest retries the hand-off to notify until acknowledged.
-2. ~~GHCR package visibility~~ — **decided: public.** No registry credential on the edge.
+1. ~~Relay source and hand-off durability~~ — **decided:** dedicated `FanoutWebhook` RPC in notify,
+   no ledger tail; ingest queues the hand-off and a sweep retries it (section 8).
+2. ~~GHCR package visibility~~ — **decided: public.**
 3. Confirmation of the items marked **(call)**, the hostname labels in section 7 above all.
 
 **Next steps after approval.** Write the implementation plan, then build in the order of section 9.
@@ -355,11 +376,10 @@ The xstockstrat part starts with `/sdd-story` → `/sdd-design quick`, not with 
 | homelab-edge | Gatus probes | `roles/stack/templates/gatus-config.yaml.j2` |
 | homelab-edge | Grants and their tests | `policy/policy.hujson`, `scripts/policy-test.sh` |
 | homelab-edge | Routing assertions | `scripts/caddy-routing-test.sh` |
-| xstockstrat | Backfill ledger emit (best-effort) | `services/xstockstrat-ingest/app/handlers/servicer.py` (`_emit_backfill_event`) |
+| xstockstrat | Backfill terminal transitions and the existing `EmitAlert` call to copy | `services/xstockstrat-ingest/app/handlers/servicer.py` |
 | xstockstrat | Agent tools `trigger_backfill` / `get_backfill_status` | `services/xstockstrat-agent/app/tools.py` |
 | xstockstrat | Existing best-effort fanout to copy patterns from | `services/xstockstrat-notify/src/fanout/` |
-| xstockstrat | `StreamEvents` exact-type filter | `services/xstockstrat-ledger/src/services/eventNotifier.ts`, `src/grpc/ledgerServiceImpl.ts` |
-| xstockstrat | Protos to change | `packages/proto/ingest/v1/ingest.proto`, `packages/proto/ledger/v1/ledger.proto` (read only) |
+| xstockstrat | Protos to change | `packages/proto/ingest/v1/ingest.proto`, `packages/proto/notify/v1/notify.proto` |
 | xstockstrat | MCP server stack to mirror | `services/xstockstrat-agent/app/main.py`, `Dockerfile` |
 | xstockstrat | Skill that must change with `trigger_backfill` | `plugins/strat-lab/` (`backtest` skill) |
 
@@ -369,5 +389,7 @@ The xstockstrat part starts with `/sdd-story` → `/sdd-design quick`, not with 
 - The `*.ts:8443` Caddy site is open to the internet, unlike the `*.ts` 443 site.
 - A Caddy route name must not equal a MagicDNS node name.
 - A PARTIAL backfill emits `ingest.backfill.completed`; there is no partial event type.
+- The ledger-tail relay was considered and rejected (section 4, B1); do not reintroduce a
+  notify → ledger dependency.
 - Notify's DB pool is 1 direct connection and must stay that way.
-- The agent's `app/egress.py` blocks tailnet addresses; the relay lives in notify, so it is not affected.
+- The agent's `app/egress.py` blocks tailnet addresses; delivery lives in notify, so it is not affected.
