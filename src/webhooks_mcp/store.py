@@ -86,6 +86,7 @@ class EventStore:
         # Held by the worker thread, so a cancelled caller cannot release it mid-statement.
         self._write_lock = threading.Lock()
         self._cond = asyncio.Condition()
+        self._inflight: set[asyncio.Future] = set()
 
     async def open(self) -> None:
         def _open() -> sqlite3.Connection:
@@ -94,6 +95,7 @@ class EventStore:
                 mode = db.execute("PRAGMA journal_mode=WAL").fetchone()[0]
                 if str(mode).lower() != "wal":
                     raise sqlite3.OperationalError(f"could not enable wal mode (got {mode})")
+                db.execute("PRAGMA temp_store = MEMORY")  # read-only root fs: no temp files
                 db.executescript(_SCHEMA)
                 db.commit()
             except BaseException:
@@ -104,9 +106,17 @@ class EventStore:
         self._db = await asyncio.to_thread(_open)
 
     async def close(self) -> None:
+        # Shielded inserts outlive cancelled callers; let them finish before closing.
+        while self._inflight:
+            await asyncio.gather(*self._inflight, return_exceptions=True)
         if self._db is not None:
             db, self._db = self._db, None
-            await asyncio.to_thread(db.close)
+
+            def _close() -> None:
+                with self._write_lock:
+                    db.close()
+
+            await asyncio.to_thread(_close)
 
     async def _run[T](self, fn: Callable[[sqlite3.Connection], T]) -> T:
         db = self._db
@@ -158,7 +168,10 @@ class EventStore:
             return result
 
         # Shielded so a cancelled caller cannot skip the wake-up of waiters.
-        return await asyncio.shield(asyncio.ensure_future(_insert_and_notify()))
+        task = asyncio.ensure_future(_insert_and_notify())
+        self._inflight.add(task)
+        task.add_done_callback(self._inflight.discard)
+        return await asyncio.shield(task)
 
     async def get(self, event_id: str) -> Event | None:
         def _get(db: sqlite3.Connection) -> Event | None:

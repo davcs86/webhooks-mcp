@@ -9,6 +9,9 @@ dependencies = [
     "uvicorn",
 ]
 
+[project.scripts]
+webhooks-mcp = "webhooks_mcp.main:cli"
+
 [project.optional-dependencies]
 dev = [
     "pytest",

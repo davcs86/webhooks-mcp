@@ -224,3 +224,32 @@ async def test_failed_sweep_rolls_back_partial_deletes(store, clock, monkeypatch
         await store.sweep()
     await store.mint("later")  # an unrelated commit must not persist the half-done sweep
     assert len(await store.list("old.e", 0, 10)) == 1
+
+
+async def test_open_keeps_sqlite_temp_files_in_memory(store):
+    assert store._db.execute("PRAGMA temp_store").fetchone()[0] == 2
+
+
+async def test_close_waits_for_an_in_flight_insert_of_a_cancelled_caller(tmp_path, clock):
+    path = tmp_path / "close.db"
+    s = EventStore(path, clock)
+    await s.open()
+    s._write_lock.acquire()  # a statement is "running" in the worker thread
+    try:
+        caller = asyncio.create_task(s.insert("a.b", '{"n":1}', None, None))
+        await asyncio.sleep(0.05)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        closing = asyncio.create_task(s.close())
+        await asyncio.sleep(0.1)
+        assert not closing.done()
+    finally:
+        s._write_lock.release()
+    await asyncio.wait_for(closing, 5)
+    reopened = EventStore(path, clock)
+    await reopened.open()
+    try:
+        assert [e.event_name for e in await reopened.list("a.b", 0, 10)] == ["a.b"]
+    finally:
+        await reopened.close()
