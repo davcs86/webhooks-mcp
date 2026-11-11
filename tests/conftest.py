@@ -1,7 +1,9 @@
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 
+from webhooks_mcp.ingest_app import build_ingest_app
 from webhooks_mcp.store import EventStore
 
 
@@ -27,3 +29,12 @@ async def store(tmp_path, clock):
     await s.open()
     yield s
     await s.close()
+
+
+@pytest.fixture
+async def ingest(store):
+    app = build_ingest_app(store)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://ingest"
+    ) as client:
+        yield client
