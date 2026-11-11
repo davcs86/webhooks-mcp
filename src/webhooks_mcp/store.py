@@ -23,6 +23,7 @@ from webhooks_mcp.constants import (
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _BASE32 = "abcdefghijklmnopqrstuvwxyz234567"
 _COLUMNS = "seq, event_id, event_name, payload, payload_bytes, received_at, source_ip"
+_META_COLUMNS = "seq, event_id, event_name, payload_bytes, received_at, source_ip"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -182,6 +183,7 @@ class EventStore:
         source_ip: str | None,
         idempotency_key: str | None,
     ) -> tuple[Event, bool]:
+        """Store an event; the returned Event (new or the original duplicate) has payload None."""
         event_id = str(uuid.uuid4())
         received_at = _iso(self._clock())
         size = len(payload_json.encode("utf-8"))
@@ -196,11 +198,12 @@ class EventStore:
         def _insert_row(db: sqlite3.Connection) -> tuple[Event, bool, int]:
             if idempotency_key is not None:
                 row = db.execute(
-                    f"SELECT {_COLUMNS} FROM events WHERE event_name = ? AND idempotency_key = ?",
+                    f"SELECT {_META_COLUMNS} FROM events"
+                    " WHERE event_name = ? AND idempotency_key = ?",
                     (event_name, idempotency_key),
                 ).fetchone()
                 if row is not None:
-                    return _event(row), True, 0
+                    return Event(*row[:3], None, *row[3:]), True, 0
             cur = db.execute(
                 "INSERT INTO events (event_id, event_name, payload, payload_bytes, received_at,"
                 " source_ip, idempotency_key) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -209,8 +212,8 @@ class EventStore:
             seq = cur.lastrowid
             delta = size - _trim_name(db, event_name)
             delta -= _evict_oldest(db, seq, self._total_bytes + delta - MAX_STORE_BYTES)
-            row = db.execute(f"SELECT {_COLUMNS} FROM events WHERE seq = ?", (seq,))
-            return _event(row.fetchone()), False, delta
+            event = Event(seq, event_id, event_name, None, size, received_at, source_ip)
+            return event, False, delta
 
         async def _insert_and_notify() -> tuple[Event, bool]:
             result = await self._run(_insert)

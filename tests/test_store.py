@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import os
 import re
 import sqlite3
@@ -37,14 +38,16 @@ class SlowInsertDb:
 async def test_insert_assigns_increasing_seq_and_uuid(store):
     a, dup_a = await store.insert("a.b", '{"x":1}', "100.64.0.1", None)
     b, _ = await store.insert("a.b", '{"x":2}', None, None)
-    assert (dup_a, b.seq > a.seq, a.payload, a.payload_bytes) == (False, True, {"x": 1}, 7)
+    assert (dup_a, b.seq > a.seq, a.payload_bytes) == (False, True, 7)
+    assert (await store.get(a.event_id)).payload == {"x": 1}
     assert uuid.UUID(a.event_id)
 
 
 async def test_idempotency_key_returns_original(store):
     a, _ = await store.insert("a.b", "1", None, "k1")
     b, dup = await store.insert("a.b", "2", None, "k1")
-    assert (b.event_id, dup, b.payload) == (a.event_id, True, 1)
+    assert (b.event_id, dup, b.seq) == (a.event_id, True, a.seq)
+    assert (await store.get(b.event_id)).payload == 1
 
 
 async def test_same_key_under_another_name_is_a_new_event(store):
@@ -61,8 +64,16 @@ async def test_concurrent_same_key_makes_one_row(store):
 
 async def test_get_returns_event_or_none(store):
     a, _ = await store.insert("a.b", '{"x":1}', "100.64.0.1", None)
-    assert await store.get(a.event_id) == a
+    assert await store.get(a.event_id) == dataclasses.replace(a, payload={"x": 1})
     assert await store.get(str(uuid.uuid4())) is None
+
+
+async def test_insert_returns_metadata_without_payload(store):
+    fresh, _ = await store.insert("a.b", '{"x":1}', "100.64.0.1", "k")
+    dup, _ = await store.insert("a.b", '{"x":1}', "100.64.0.1", "k")
+    assert fresh.payload is None and dup == fresh
+    stored = await store.get(fresh.event_id)
+    assert dataclasses.replace(stored, payload=None) == fresh
 
 
 async def test_list_is_cursor_paginated(store):

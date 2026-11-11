@@ -83,9 +83,9 @@ def _source_ip(request: Request) -> str | None:
 
 
 def build_ingest_app(store: EventStore) -> Starlette:
-    async def _store_event(request: Request, event_name: str, payload: Any) -> Response:
+    async def _store_event(request: Request, event_name: str, payload_json: str) -> Response:
         event, duplicate = await store.insert(
-            event_name, _compact(payload), _source_ip(request), _idempotency_key(request)
+            event_name, payload_json, _source_ip(request), _idempotency_key(request)
         )
         return JSONResponse(
             {"event_id": event.event_id, "duplicate": duplicate},
@@ -104,7 +104,10 @@ def build_ingest_app(store: EventStore) -> Starlette:
                 raise _HttpError(422, "event_name may not use the minted. prefix")
             if "payload" not in body:
                 raise _HttpError(422, "payload is required")
-            return await _store_event(request, name, body["payload"])
+            payload_json = _compact(body["payload"])
+            # The parsed tree is many times the body size; drop it before waiting for the writer.
+            del body
+            return await _store_event(request, name, payload_json)
         except _HttpError as err:
             return JSONResponse({"error": err.reason}, status_code=err.status)
 
@@ -113,8 +116,8 @@ def build_ingest_app(store: EventStore) -> Starlette:
         try:
             if not is_valid_event_name(name) or not await store.is_minted_active(name):
                 raise _HttpError(404, "unknown or expired webhook name")
-            body = _parse_json(await _read_body(request))
-            return await _store_event(request, name, body)
+            payload_json = _compact(_parse_json(await _read_body(request)))
+            return await _store_event(request, name, payload_json)
         except _HttpError as err:
             return JSONResponse({"error": err.reason}, status_code=err.status)
 
