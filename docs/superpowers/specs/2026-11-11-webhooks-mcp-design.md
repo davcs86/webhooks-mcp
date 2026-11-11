@@ -330,10 +330,13 @@ No code exists in any repo. Work branch in all three repos: `claude/webhook-list
 
 **Open owner decisions — do not guess these.**
 
-1. Ledger-write hardening in ingest (8.1): (a) in scope — job records "terminal event emitted", a
-   periodic sweep re-emits missing ones using the ledger idempotency key (recommended); or (b) out of
-   scope, gap documented.
-2. GHCR package public, or a pull token on the edge (6.6).
+1. **Owner redirected the relay source (2026-11-11): "use notify instead" of the ledger tail, to avoid
+   a notify ↔ ledger circular dependency.** Sections 4 (approach B), 8.1–8.3 still describe the ledger
+   tail and are **superseded** on that point; they are rewritten once the owner confirms the shape:
+   ingest hands the webhook to notify through a dedicated notify RPC, notify persists it and owns
+   retries, no ledger client in notify. Pending confirmation: dedicated RPC vs. reusing `EmitAlert`,
+   and whether ingest retries the hand-off to notify until acknowledged.
+2. ~~GHCR package visibility~~ — **decided: public.** No registry credential on the edge.
 3. Confirmation of the items marked **(call)**, the hostname labels in section 7 above all.
 
 **Next steps after approval.** Write the implementation plan, then build in the order of section 9.
