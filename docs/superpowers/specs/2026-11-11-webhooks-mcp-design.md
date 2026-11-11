@@ -1,6 +1,6 @@
 # webhooks-mcp — design
 
-Date: 2026-11-11. Status: awaiting owner approval.
+Date: 2026-11-11. Status: approved by the owner.
 
 Spans three repositories: `davcs86/webhooks-mcp` (the service), `davcs86/homelab-edge` (its deployment
 on the edge droplet), `davcs86/xstockstrat` (the first publisher).
@@ -349,7 +349,9 @@ Each step is usable on its own: after step 2 any tailnet service can already pub
 
 Read this section first when picking the work up in a fresh context.
 
-**Where things stand.** Design written and reviewed once against the code; awaiting owner approval.
+**Where things stand.** Design **approved by the owner (2026-11-11)**. Implementation plans are in
+`docs/superpowers/plans/`: `2026-11-11-orchestration.md` (start there — it holds the status table and
+the one open decision, D1) and `2026-11-11-webhooks-mcp-listener.md`.
 No code exists in any repo. Work branch in all three repos: `claude/webhook-listener-mcp-ltjc1r`
 (xstockstrat PRs target `main-dev`, the other two `main`). This document is PR #1 of `webhooks-mcp`.
 
