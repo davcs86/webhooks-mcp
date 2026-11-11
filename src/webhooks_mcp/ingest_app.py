@@ -73,10 +73,12 @@ def _idempotency_key(request: Request) -> str | None:
 
 def _source_ip(request: Request) -> str | None:
     forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    try:
-        return str(ipaddress.ip_address(forwarded))
-    except ValueError:
-        pass
+    # Zone ids ("%...") are accepted by ip_address but are unbounded client text.
+    if "%" not in forwarded:
+        try:
+            return str(ipaddress.ip_address(forwarded))
+        except ValueError:
+            pass
     return request.client.host if request.client else None
 
 

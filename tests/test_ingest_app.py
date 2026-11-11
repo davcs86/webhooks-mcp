@@ -22,7 +22,10 @@ async def test_source_ip_falls_back_to_socket_peer(ingest, store):
     assert e.source_ip == "127.0.0.1"
 
 
-@pytest.mark.parametrize("xff", ["garbage", "x" * 12_000, "1.2.3.4.5", "999.1.1.1"])
+@pytest.mark.parametrize(
+    "xff",
+    ["garbage", "x" * 12_000, "1.2.3.4.5", "999.1.1.1", "fe80::1%eth0", "fe80::1%" + "x" * 12_000],
+)
 async def test_invalid_forwarded_for_falls_back_to_peer(ingest, store, xff):
     r = await ingest.post(
         "/hooks", json={"event_name": "a.b", "payload": 1}, headers={"X-Forwarded-For": xff}
@@ -32,7 +35,11 @@ async def test_invalid_forwarded_for_falls_back_to_peer(ingest, store, xff):
 
 @pytest.mark.parametrize(
     ("xff", "stored"),
-    [("203.0.113.9", "203.0.113.9"), ("2001:db8::1, 10.0.0.1", "2001:db8::1")],
+    [
+        ("203.0.113.9", "203.0.113.9"),
+        ("2001:db8::1, 10.0.0.1", "2001:db8::1"),
+        ("::ffff:1.2.3.4", "::ffff:1.2.3.4"),
+    ],
 )
 async def test_valid_forwarded_for_is_stored(ingest, store, xff, stored):
     r = await ingest.post(
