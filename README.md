@@ -35,6 +35,7 @@ curl -X POST http://127.0.0.1:9101/hooks/minted.demo-3f9a1c -d '{"any":"json"}'
 | Not JSON, bad or missing `event_name`, missing `payload`, `minted.` prefix on the typed endpoint | 422 `{"error"}` |
 | Body over 256 KiB | 413 |
 | Minted name never issued or expired | 404 |
+| More than 32 requests already in flight on the ingest listener | 503 (retry later) |
 
 `event_name` matches `^[a-z0-9][a-z0-9._-]{0,127}$`.
 
@@ -48,7 +49,7 @@ Every request needs `Authorization: Bearer <MCP_AUTH_KEY>`; otherwise 401.
 | `get_event(event_id)` | One event with its full payload; `NOT_FOUND` if unknown |
 | `wait_for_event(event_name, after_seq=0, timeout_s=25)` | Returns once an event newer than `after_seq` exists, or empty at the timeout (at most 25 s) |
 | `mint_webhook_url(label)` | Creates a `minted.<label>-<random>` name; returns `{event_name, urls, expires_at}` with one URL per `INGEST_BASE_URLS` entry. `label`: lowercase letters, digits, hyphens, 1 to 32 characters |
-| `list_event_names()` | Names that currently hold events, with counts |
+| `list_event_names()` | Names that currently hold events, with counts, in name order. Returns `{names: [{event_name, count}], truncated}`; at most 500 names, `truncated: true` when more exist |
 
 Each event is `{event_id, seq, event_name, received_at, source_ip, payload_bytes, payload}`. Lists and
 waits inline a payload only up to 4 KiB; a larger one comes back as `payload_truncated: true` and is
@@ -64,8 +65,14 @@ fetched with `get_event`. Pass `next_after_seq` back as `after_seq` to page. Rea
 
 ## Retention
 
-Events and minted names live 7 days. Each event name keeps at most 1000 events (oldest trimmed
-first). A sweep runs at start and hourly. These values live in `src/webhooks_mcp/constants.py`.
+Events and minted names live 7 days. Two bounds are enforced on every insert, evicting oldest
+first: each event name keeps at most 1000 events, and the store as a whole holds at most 1 GiB of
+payload (sum of `payload_bytes`), deleting the globally oldest events until it fits. The event just
+stored is never evicted by its own insert. Cursors stay valid: `seq` values are never reused, so an
+evicted event simply no longer appears after `after_seq`. A sweep runs at start and hourly to expire
+old events and minted names and to return freed space to the filesystem (for a database file first
+created by this version; an older file keeps its free pages for reuse). These values live in
+`src/webhooks_mcp/constants.py`.
 
 ## Run it
 
