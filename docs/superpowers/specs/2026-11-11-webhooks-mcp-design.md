@@ -319,3 +319,52 @@ Each step is usable on its own: after step 2 any tailnet service can already pub
 - Exact retry schedule and attempt count for the relay (config keys, seeded by migration).
 - Names of the new xstockstrat config keys, tables and the SDD slug.
 - Caddy rate-limit values for the ingest host.
+
+## 11. Resume state (as of 2026-11-11)
+
+Read this section first when picking the work up in a fresh context.
+
+**Where things stand.** Design written and reviewed once against the code; awaiting owner approval.
+No code exists in any repo. Work branch in all three repos: `claude/webhook-listener-mcp-ltjc1r`
+(xstockstrat PRs target `main-dev`, the other two `main`). This document is PR #1 of `webhooks-mcp`.
+
+**Open owner decisions — do not guess these.**
+
+1. Ledger-write hardening in ingest (8.1): (a) in scope — job records "terminal event emitted", a
+   periodic sweep re-emits missing ones using the ledger idempotency key (recommended); or (b) out of
+   scope, gap documented.
+2. GHCR package public, or a pull token on the edge (6.6).
+3. Confirmation of the items marked **(call)**, the hostname labels in section 7 above all.
+
+**Next steps after approval.** Write the implementation plan, then build in the order of section 9.
+The xstockstrat part starts with `/sdd-story` → `/sdd-design quick`, not with code.
+
+**Code landmarks found during recon** (verify before relying on them — line numbers drift).
+
+| Repo | What | Where |
+|---|---|---|
+| homelab-edge | Compose services, `x-hardening` anchor | `roles/stack/templates/compose.yml.j2` |
+| homelab-edge | Public routes, rate-limit zones, `(tailnet_only)`, `*.ts` and `*.ts:8443` sites | `roles/stack/templates/Caddyfile.j2` |
+| homelab-edge | Hostnames, limits, droplet size | `inventories/prod/group_vars/all/main.yml` |
+| homelab-edge | Image pins | `inventories/prod/group_vars/all/versions.yml`, `docs/versions.md` |
+| homelab-edge | Env-file secrets, Caddy build, `tls-check` | `roles/stack/tasks/main.yml` |
+| homelab-edge | Split-horizon records | `roles/tailscale/tasks/main.yml` |
+| homelab-edge | Gatus probes | `roles/stack/templates/gatus-config.yaml.j2` |
+| homelab-edge | Grants and their tests | `policy/policy.hujson`, `scripts/policy-test.sh` |
+| homelab-edge | Routing assertions | `scripts/caddy-routing-test.sh` |
+| xstockstrat | Backfill ledger emit (best-effort) | `services/xstockstrat-ingest/app/handlers/servicer.py` (`_emit_backfill_event`) |
+| xstockstrat | Agent tools `trigger_backfill` / `get_backfill_status` | `services/xstockstrat-agent/app/tools.py` |
+| xstockstrat | Existing best-effort fanout to copy patterns from | `services/xstockstrat-notify/src/fanout/` |
+| xstockstrat | `StreamEvents` exact-type filter | `services/xstockstrat-ledger/src/services/eventNotifier.ts`, `src/grpc/ledgerServiceImpl.ts` |
+| xstockstrat | Protos to change | `packages/proto/ingest/v1/ingest.proto`, `packages/proto/ledger/v1/ledger.proto` (read only) |
+| xstockstrat | MCP server stack to mirror | `services/xstockstrat-agent/app/main.py`, `Dockerfile` |
+| xstockstrat | Skill that must change with `trigger_backfill` | `plugins/strat-lab/` (`backtest` skill) |
+
+**Facts that are easy to lose.**
+
+- Homelab staging reaches the edge only on 8443; 443 is denied by policy.
+- The `*.ts:8443` Caddy site is open to the internet, unlike the `*.ts` 443 site.
+- A Caddy route name must not equal a MagicDNS node name.
+- A PARTIAL backfill emits `ingest.backfill.completed`; there is no partial event type.
+- Notify's DB pool is 1 direct connection and must stay that way.
+- The agent's `app/egress.py` blocks tailnet addresses; the relay lives in notify, so it is not affected.
