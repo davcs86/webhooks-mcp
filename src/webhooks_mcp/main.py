@@ -10,14 +10,17 @@ from datetime import UTC, datetime
 import uvicorn
 
 from webhooks_mcp.config import ConfigError, Settings
-from webhooks_mcp.constants import SWEEP_INTERVAL_SECONDS
+from webhooks_mcp.constants import (
+    GRACEFUL_SHUTDOWN_SECONDS,
+    INGEST_MAX_CONCURRENT_REQUESTS,
+    KEEP_ALIVE_SECONDS,
+    MAX_CONCURRENT_REQUESTS,
+    SWEEP_INTERVAL_SECONDS,
+)
 from webhooks_mcp.ingest_app import build_ingest_app
 from webhooks_mcp.mcp_app import build_mcp_app
 from webhooks_mcp.store import EventStore
 
-KEEP_ALIVE_SECONDS = 5
-MAX_CONCURRENT_REQUESTS = 200
-GRACEFUL_SHUTDOWN_SECONDS = 5
 READY_POLL_SECONDS = 0.02
 
 log = logging.getLogger("webhooks_mcp")
@@ -53,7 +56,7 @@ class _Server(uvicorn.Server):
         yield
 
 
-def _server(app, host: str, port: int) -> _Server:
+def _server(app, host: str, port: int, limit: int) -> _Server:
     return _Server(
         uvicorn.Config(
             app,
@@ -65,7 +68,7 @@ def _server(app, host: str, port: int) -> _Server:
             proxy_headers=False,
             server_header=False,
             timeout_keep_alive=KEEP_ALIVE_SECONDS,
-            limit_concurrency=MAX_CONCURRENT_REQUESTS,
+            limit_concurrency=limit,
             timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
         )
     )
@@ -117,8 +120,8 @@ async def run(
     try:
         await store.sweep()
         servers = [
-            _server(build_mcp_app(store, settings), host, mcp_port),
-            _server(build_ingest_app(store), host, ingest_port),
+            _server(build_mcp_app(store, settings), host, mcp_port, MAX_CONCURRENT_REQUESTS),
+            _server(build_ingest_app(store), host, ingest_port, INGEST_MAX_CONCURRENT_REQUESTS),
         ]
         tasks = [
             asyncio.create_task(_serve(servers[0], mcp_port)),

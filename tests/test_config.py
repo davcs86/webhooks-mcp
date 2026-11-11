@@ -43,3 +43,8 @@ def test_error_never_contains_the_key():
     with pytest.raises(ConfigError) as exc:
         Settings.from_env({"MCP_AUTH_KEY": secret})
     assert secret not in str(exc.value)
+
+
+def test_repr_never_contains_the_key():
+    s = Settings.from_env({"MCP_AUTH_KEY": K, "INGEST_BASE_URLS": BASES})
+    assert K not in repr(s) and "https://h" in repr(s)

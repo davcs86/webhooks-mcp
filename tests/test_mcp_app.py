@@ -1,10 +1,20 @@
 import asyncio
+import inspect
 import json
 import time
+import tracemalloc
+from datetime import timedelta
+from urllib.parse import urlsplit
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
+from webhooks_mcp.constants import (
+    EVENT_TTL,
+    INLINE_PAYLOAD_BYTES,
+    LIST_NAMES_LIMIT,
+    WAIT_MAX_SECONDS,
+)
 from webhooks_mcp.mcp_app import (
     get_event,
     list_event_names,
@@ -111,7 +121,8 @@ async def test_list_event_names_counts(store):
     await store.insert("a.b", "2", None, None)
     await store.insert("c.d", "3", None, None)
     assert await list_event_names(store) == {
-        "names": [{"event_name": "a.b", "count": 2}, {"event_name": "c.d", "count": 1}]
+        "names": [{"event_name": "a.b", "count": 2}, {"event_name": "c.d", "count": 1}],
+        "truncated": False,
     }
 
 
@@ -206,3 +217,63 @@ async def test_huge_after_seq_is_clamped(store):
     await store.insert("a.b", "1", None, None)
     assert (await list_events(store, "a.b", after_seq=2**70))["events"] == []
     assert (await wait_for_event(store, "a.b", after_seq=2**70, timeout_s=0))["events"] == []
+
+
+async def test_list_events_does_not_load_payloads_it_will_not_inline(store):
+    big = "[" + ",".join(["{}"] * 87_000) + "]"
+    for _ in range(100):
+        await store.insert("a.b", big, None, None)
+    tracemalloc.start()
+    try:
+        r = await list_events(store, "a.b", limit=100)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert len(r["events"]) == 100 and all(e["payload_truncated"] for e in r["events"])
+    assert peak < 20e6  # one parsed payload alone is ~7 MB
+
+
+async def test_wait_for_event_truncates_without_loading_large_payloads(store):
+    await store.insert("a.b", json.dumps({"big": "x" * 5000}), None, None)
+    r = await wait_for_event(store, "a.b", timeout_s=0)
+    assert r["events"][0]["payload_truncated"] is True and "payload" not in r["events"][0]
+    assert (await store.wait("a.b", 0, 0, inline_max_bytes=INLINE_PAYLOAD_BYTES))[0].payload is None
+
+
+async def test_store_list_inlines_only_up_to_the_given_size(store):
+    await store.insert("a.b", '{"s":1}', None, None)
+    await store.insert("a.b", '"' + "x" * 20 + '"', None, None)
+    small, large = await store.list("a.b", 0, 10, inline_max_bytes=7)
+    assert (small.payload, large.payload, large.payload_bytes) == ({"s": 1}, None, 22)
+    assert [e.payload for e in await store.list("a.b", 0, 10)] == [{"s": 1}, "x" * 20]
+
+
+async def test_stored_null_payload_is_returned_not_truncated(store):
+    await store.insert("a.b", "null", None, None)
+    for r in (await list_events(store, "a.b"), await wait_for_event(store, "a.b", timeout_s=0)):
+        assert r["events"][0]["payload"] is None and "payload_truncated" not in r["events"][0]
+
+
+async def test_list_event_names_is_capped(store):
+    for i in range(LIST_NAMES_LIMIT + 2):
+        await store.insert(f"n{i:04d}.e", "1", None, None)
+    r = await list_event_names(store)
+    assert r["truncated"] is True and len(r["names"]) == LIST_NAMES_LIMIT
+    assert r["names"][0] == {"event_name": "n0000.e", "count": 1}
+    assert r["names"] == sorted(r["names"], key=lambda n: n["event_name"])
+
+
+def test_wait_timeout_default_is_the_maximum():
+    assert inspect.signature(wait_for_event).parameters["timeout_s"].default == WAIT_MAX_SECONDS
+
+
+async def test_minted_flow_end_to_end(store, settings, ingest, clock):
+    minted = await mint_webhook_url(store, settings, "seam")
+    path = urlsplit(minted["urls"]["default"]).path
+    body = {"event_name": "ignored", "payload": {"n": 1}, "extra": [1, 2]}
+    assert (await ingest.post(path, json=body)).status_code == 201
+    waited = await wait_for_event(store, minted["event_name"], timeout_s=1)
+    listed = await list_events(store, minted["event_name"])
+    assert waited["events"][0]["payload"] == listed["events"][0]["payload"] == body
+    clock.advance(EVENT_TTL + timedelta(seconds=1))
+    assert (await ingest.post(path, json=body)).status_code == 404

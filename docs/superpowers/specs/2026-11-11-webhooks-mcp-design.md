@@ -133,6 +133,7 @@ expose ingestion. Single process because `wait_for_event` wakes on an in-process
 | Idempotent repeat | 200 | `{"event_id": "...", "duplicate": true}` |
 | Not JSON / bad name / missing field | 422 | `{"error": "..."}` |
 | Too large | 413 | |
+| More than `INGEST_MAX_CONCURRENT_REQUESTS` (32) connections in flight | 503 | Publisher retries |
 | Unknown or expired minted name | 404 | |
 
 ### 6.3 MCP tools
@@ -146,7 +147,7 @@ Every MCP request needs `Authorization: Bearer <MCP_AUTH_KEY>`, compared in cons
 | `get_event(event_id)` | One event with its full payload |
 | `wait_for_event(event_name, after_seq=0, timeout_s=25)` | Returns as soon as an event newer than the cursor exists, or empty at timeout (max 25 s) |
 | `mint_webhook_url(label)` | Returns `{event_name, urls, expires_at}`; `urls` has one entry per configured ingest base (6.5) |
-| `list_event_names()` **(call)** | Names that currently hold events, with counts — discovery |
+| `list_event_names()` **(call)** | Names that currently hold events, with counts — discovery. At most 500 names; the result carries `truncated` |
 
 Each event is returned as `{event_id, seq, event_name, received_at, source_ip, payload_bytes, payload}`.
 List and wait results inline the payload only when it is at most `INLINE_PAYLOAD_BYTES` (4 KiB)
@@ -168,8 +169,20 @@ SQLite in WAL mode on a volume at `/data`.
 
 Constants in one module: `EVENT_TTL = 7 days`, `MAX_BODY_BYTES = 256 KiB`,
 `MAX_EVENTS_PER_NAME = 1000`, `INLINE_PAYLOAD_BYTES = 4 KiB`, `WAIT_MAX_SECONDS = 25`.
-A sweep runs at start and hourly: it deletes events and minted URLs older than `EVENT_TTL` and trims
-each name to `MAX_EVENTS_PER_NAME`, oldest first. A minted URL lives for `EVENT_TTL` **(call)**.
+`MAX_STORE_BYTES = 1 GiB` (each event charged its payload size plus `ROW_OVERHEAD_BYTES = 1 KiB`),
+`LIST_NAMES_LIMIT = 500`,
+`INGEST_MAX_CONCURRENT_REQUESTS = 32`.
+
+Bounds are enforced **on insert**, oldest first, in the same transaction: a name never holds more than
+`MAX_EVENTS_PER_NAME` events and the store never holds more than `MAX_STORE_BYTES`. The event being
+inserted is never evicted by its own insert. Over budget, the oldest events are evicted rather than the
+new one refused **(call)** — this keeps the response contract in 6.2 unchanged; the cost is that a
+flooding publisher pushes out other publishers' oldest events. A sweep runs at start and hourly: it
+deletes events and minted URLs older than `EVENT_TTL` and returns freed pages to the filesystem.
+
+List and wait results read only payloads small enough to inline; large payloads are read by
+`get_event` alone. The container has a 192 MB memory limit, and parsing a page of large payloads to
+discard them exceeded it. A minted URL lives for `EVENT_TTL` **(call)**.
 
 Reads never delete: an event can be read any number of times until it expires.
 

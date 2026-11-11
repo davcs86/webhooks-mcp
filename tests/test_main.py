@@ -10,7 +10,9 @@ import time
 import httpx
 import pytest
 
+from webhooks_mcp.constants import INGEST_MAX_CONCURRENT_REQUESTS, MAX_CONCURRENT_REQUESTS
 from webhooks_mcp.main import StoreOpenError, run
+from webhooks_mcp.store import EventStore
 
 pytest_plugins = ["mcp_fixtures"]
 
@@ -239,3 +241,37 @@ def test_process_logs_json_lines_never_contain_the_key_and_exits_0_on_sigterm(tm
     assert key not in out and key not in err and "s3cret-header-value" not in out + err
     lines = [json.loads(line) for line in out.splitlines()]
     assert lines and all({"time", "level", "logger", "message"} <= set(x) for x in lines)
+
+
+@pytest.fixture
+def held_inserts(monkeypatch):
+    gate, arrived = asyncio.Event(), asyncio.Event()
+    real_insert = EventStore.insert
+
+    async def held_insert(self, *args):
+        arrived.set()
+        await gate.wait()
+        return await real_insert(self, *args)
+
+    monkeypatch.setattr(EventStore, "insert", held_insert)
+    return gate, arrived
+
+
+async def test_ingest_listener_has_its_own_lower_concurrency_limit(held_inserts, running, ports):
+    gate, arrived = held_inserts
+    n = INGEST_MAX_CONCURRENT_REQUESTS + 8
+    body = {"event_name": "a.b", "payload": 1}
+    limits = httpx.Limits(max_connections=n, max_keepalive_connections=0)
+    async with httpx.AsyncClient(timeout=10, limits=limits) as c:
+        url = f"http://127.0.0.1:{ports[1]}/hooks"
+        posts = []
+        for _ in range(n):  # one at a time, so each request sees the ones already in flight
+            arrived.clear()
+            posts.append(asyncio.create_task(c.post(url, json=body)))
+            arrival = asyncio.create_task(arrived.wait())
+            await asyncio.wait({posts[-1], arrival}, timeout=5, return_when=asyncio.FIRST_COMPLETED)
+            arrival.cancel()
+        gate.set()
+        codes = [r.status_code for r in await asyncio.gather(*posts)]
+    assert set(codes) == {201, 503}
+    assert codes.count(201) <= INGEST_MAX_CONCURRENT_REQUESTS < MAX_CONCURRENT_REQUESTS

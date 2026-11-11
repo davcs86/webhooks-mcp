@@ -1,7 +1,7 @@
 import json
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -14,7 +14,7 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class Settings:
-    mcp_auth_key: str
+    mcp_auth_key: str = field(repr=False)
     ingest_base_urls: dict[str, str]
     data_dir: Path
 

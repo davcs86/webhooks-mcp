@@ -1,3 +1,5 @@
+import asyncio
+import tracemalloc
 from datetime import timedelta
 
 import pytest
@@ -214,3 +216,41 @@ async def test_mcp_route_absent(ingest):
 
 async def test_get_hooks_is_405(ingest):
     assert (await ingest.get("/hooks")).status_code == 405
+
+
+async def _peak_mb_with_inserts_held(ingest, store, path, body, n):
+    real_insert, gate, all_held, held = store.insert, asyncio.Event(), asyncio.Event(), []
+
+    async def held_insert(*args):
+        held.append(1)
+        if len(held) == n:
+            all_held.set()
+        await gate.wait()
+        return await real_insert(*args)
+
+    store.insert = held_insert
+    tracemalloc.start()
+    try:
+        posts = [asyncio.create_task(ingest.post(path, content=body)) for _ in range(n)]
+        await asyncio.wait_for(all_held.wait(), 30)
+        gate.set()
+        statuses = {r.status_code for r in await asyncio.gather(*posts)}
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert statuses == {201}
+    return peak / 1e6
+
+
+OBJECTS = b",".join([b"{}"] * 87_000)
+
+
+@pytest.mark.parametrize("minted", [False, True])
+async def test_requests_waiting_for_the_writer_hold_no_parsed_tree(ingest, store, minted):
+    if minted:
+        path, body = f"/hooks/{(await store.mint('job')).event_name}", b"[" + OBJECTS + b"]"
+    else:
+        path, body = "/hooks", b'{"event_name":"a.b","payload":[' + OBJECTS + b"]}"
+    assert len(body) <= MAX_BODY_BYTES
+    # One parsed body here is ~7 MB; 30 held trees would be over 200 MB.
+    assert await _peak_mb_with_inserts_held(ingest, store, path, body, 30) < 60

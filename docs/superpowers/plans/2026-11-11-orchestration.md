@@ -55,7 +55,7 @@ workstream, amend the spec, get the owner's approval, restart from the affected 
 |---|---|---|---|
 | C1 | MCP listener | container port `9100`, `POST /mcp`, `GET /healthz`; `Authorization: Bearer <key>`; 401 without it | W1 → W2 |
 | C2 | Ingest listener | container port `9101`, `POST /hooks`, `POST /hooks/{name}`, `GET /healthz` | W1 → W2, W3 |
-| C3 | Ingest responses | 201 `{event_id, duplicate:false}`, 200 `{…duplicate:true}`, 404, 413, 422 (spec 6.2) | W1 → W3 |
+| C3 | Ingest responses | 201 `{event_id, duplicate:false}`, 200 `{…duplicate:true}`, 404, 413, 422, and 503 when over the concurrency limit — retry (spec 6.2) | W1 → W3 |
 | C4 | Container env | `MCP_AUTH_KEY`, `INGEST_BASE_URLS` (JSON map), `DATA_DIR=/data` | W1 → W2 |
 | C5 | Client address | Ingest reads the first address of `X-Forwarded-For` as `source_ip` | W2 → W1 |
 | C6 | Body cap | 256 KiB at the listener; Caddy's cap on the ingest host equals it | W1 ↔ W2 |
@@ -304,23 +304,57 @@ orchestrator context can resume from this file alone.
 
 ## 10. Status
 
+Last updated 2026-11-11 21:00 UTC. Per-task detail lives in the PRs; this table is the cross-repo record.
+
 | Item | State | Evidence |
 |---|---|---|
 | Spec approved | done | owner, 2026-11-11 |
-| PR #1 (spec + plans) merged | pending | |
+| PR #1 (spec + plans) merged | done | `ad7e0ec` |
 | D1 answered | done | (a), owner, 2026-11-11 |
 | Merge authorisation | done | owner, 2026-11-11 |
-| W1.T1 store | not started | |
-| W1.T2 ingest app | not started | |
-| W1.T3 MCP app | not started | |
-| W1.T4 process + sweep | not started | |
-| W1.T5 image + CI | not started | |
-| G1 digest | pending | |
-| W2.E1 service + secret | not started | |
-| W2.E2 Caddy | not started | |
-| W2.E3 monitoring + names | not started | |
-| W2.E4 pin + docs | blocked on G1 | |
-| G2 live on edge | pending | |
-| W3 session | not started | |
+| W1.T1 store | done | reviewed; fix round 1 |
+| W1.T2 ingest app | done | reviewed; 2 fix rounds |
+| W1.T3 MCP app | done | reviewed; fix round 1 |
+| W1.T4 process + sweep | done | reviewed clean |
+| W1.T5 image + CI | done | reviewed; CI built the image and `smoke: ok` on `4e472cc` |
+| W1 PR #2 merged | done — **early** | owner merged at `ee8d834`, before the final-review fixes; `main` (`1e328dc`) has the three memory/disk findings — its image must not be deployed |
+| W1 final whole-branch review | done | 3 Important fixed in PR #3, re-reviewed; residual fix `696d86d` |
+| W1 PR #3 (memory and disk bounds) | open — **blocked on CI** | GitHub Actions outage: runs queued since 20:31 UTC; local suite 155 passed, 2 skipped |
+| G1 digest | pending | needs PR #3 merged and its `main` run |
+| W2.E1 service + secret | done | reviewed; CI `secrets` green |
+| W2.E2 Caddy | done | reviewed; CI `caddy` green on `636dd20` |
+| W2.E3 monitoring + names | done | reviewed; fix round 1 |
+| W2 PR #54 | open | only `lint` red: waits on owner `init-secrets` |
+| W2.E4 docs + pin scaffolding | in progress | stacked branch `…-e4` on PR #54 |
+| W2.E4 final digest pin | blocked on G1 | one-line change |
+| G2 live on edge | pending | owner steps below |
+| W3 session | running | feature 334, `feature/webhook-fanout-callback`, executing steps |
 | W3.S7 staging e2e | blocked on G2 | |
 | G3 publisher released | pending | |
+
+### Owner steps outstanding
+
+1. Run **Actions → init-secrets** with `fill_missing` on the homelab-edge branch
+   `claude/webhook-listener-mcp-ltjc1r` (the workflow pushes to the ref it is dispatched on).
+2. Cloudflare, DNS-only: `webhooks-mcp` **A** → the droplet's reserved IPv4;
+   `_acme-challenge.webhooks-mcp` **CNAME** → `webhooks-mcp.acme.<domain>`.
+3. Widen the deSEC token to the fourth TXT RRset, `webhooks-mcp`.
+4. Set the GHCR package `webhooks-mcp` to **public** (it exists since the PR #2 merge).
+5. After the edge PRs merge: `deploy`, then `verify`; add the Claude.ai connector with the bearer header.
+
+### Deviations from this plan, as executed
+
+- **Task commits are pushed before review.** The session's stop hook requires every local branch to be
+  pushed, and pushes were limited to the integration branch. So task commits land on the integration
+  branch first and review fixes follow as further commits. Section 3's "task branches are never pushed"
+  and "one commit per reviewed task" did not hold. PRs are still merged only after every review is clean.
+- **Stacked PRs (owner instruction, 2026-11-11).** While CI is unavailable, new work goes on a branch
+  stacked on the open PR's branch, with its own PR based on that branch, so a CI-verified head is not
+  moved by commits that cannot be checked. Each stacked PR is retargeted to the default branch when
+  its base merges. Stacked branches are named `<integration branch>-<topic>`.
+- **No history rewriting.** After PR #2 merged early, `main` was merged into the branch (a rebase plus
+  force-push was refused by the session's permission mode).
+- **Contract additions from the final review** (spec section 6 amended): the ingest listener answers
+  **503** above 32 concurrent connections and publishers retry; `list_event_names` returns at most 500
+  names plus `truncated`; the store evicts oldest-first on insert (1000 events per name, 1 GiB total
+  counting payload bytes plus 1024 per row).
