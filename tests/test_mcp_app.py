@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 
@@ -181,3 +182,27 @@ async def test_hooks_route_absent(mcp_http, auth):
     for path in ("/hooks", "/hooks/a.b", "/", "/nope"):
         r = await mcp_http.post(path, json={}, headers=auth)
         assert r.status_code == 404, path
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+async def test_wait_non_finite_timeout_is_invalid_argument(store, bad):
+    with pytest.raises(ToolError, match="INVALID_ARGUMENT: timeout_s"):
+        await asyncio.wait_for(wait_for_event(store, "a.b", timeout_s=bad), 2)
+
+
+@pytest.mark.parametrize("raw", ['"nan"', "NaN", "Infinity"])
+async def test_wait_non_finite_timeout_over_http_errors_promptly(mcp_http, auth, raw):
+    body = (
+        '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wait_for_event",'
+        f'"arguments":{{"event_name":"a.b","timeout_s":{raw}}}}}}}'
+    )
+    h = {**MCP_HEADERS, **auth}
+    r = await asyncio.wait_for(mcp_http.post("/mcp", content=body, headers=h), 3)
+    result = r.json().get("result", {})
+    assert r.status_code != 200 or result.get("isError") is True
+
+
+async def test_huge_after_seq_is_clamped(store):
+    await store.insert("a.b", "1", None, None)
+    assert (await list_events(store, "a.b", after_seq=2**70))["events"] == []
+    assert (await wait_for_event(store, "a.b", after_seq=2**70, timeout_s=0))["events"] == []

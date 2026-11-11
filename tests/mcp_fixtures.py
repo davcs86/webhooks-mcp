@@ -35,7 +35,11 @@ async def mcp_http(store, settings):
             await stop.wait()
 
     task = asyncio.create_task(run_lifespan())
-    await started.wait()
+    waiter = asyncio.create_task(started.wait())
+    await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+    waiter.cancel()
+    if task.done():
+        task.result()  # re-raises the startup failure
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client

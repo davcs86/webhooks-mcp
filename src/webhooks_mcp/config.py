@@ -3,6 +3,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from webhooks_mcp.constants import MIN_AUTH_KEY_CHARS
 
@@ -29,6 +30,14 @@ class Settings:
         )
 
 
+def _is_http_url(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and bool(parts.netloc)
+
+
 def _parse_bases(raw: str | None) -> dict[str, str]:
     if not raw:
         raise ConfigError("INGEST_BASE_URLS is not set")
@@ -40,7 +49,7 @@ def _parse_bases(raw: str | None) -> dict[str, str]:
         raise ConfigError("INGEST_BASE_URLS must be a JSON object")
     bases: dict[str, str] = {}
     for label, url in parsed.items():
-        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        if not isinstance(url, str) or not _is_http_url(url):
             raise ConfigError(f"INGEST_BASE_URLS entry {label!r} must be an http(s) URL")
         bases[label] = url.rstrip("/")
     if "default" not in bases:

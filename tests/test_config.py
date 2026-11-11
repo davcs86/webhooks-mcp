@@ -29,6 +29,8 @@ def test_data_dir_override():
         ({"MCP_AUTH_KEY": K, "INGEST_BASE_URLS": '{"default":""}'}, "INGEST_BASE_URLS"),
         ({"MCP_AUTH_KEY": K, "INGEST_BASE_URLS": '{"default":"ftp://h"}'}, "INGEST_BASE_URLS"),
         ({"MCP_AUTH_KEY": K, "INGEST_BASE_URLS": '{"default":3}'}, "INGEST_BASE_URLS"),
+        ({"MCP_AUTH_KEY": K, "INGEST_BASE_URLS": '{"default":"https://"}'}, "INGEST_BASE_URLS"),
+        ({"MCP_AUTH_KEY": K, "INGEST_BASE_URLS": '{"default":"http:///x"}'}, "INGEST_BASE_URLS"),
     ],
 )
 def test_from_env_errors_name_the_variable(env, var):
