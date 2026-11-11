@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ipaddress
 import json
+import math
 from typing import Any
 
 from starlette.applications import Starlette
@@ -25,6 +27,13 @@ def _reject_constant(name: str) -> Any:
     raise ValueError(f"non-standard JSON constant {name}")
 
 
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError("non-finite number")
+    return value
+
+
 async def _read_body(request: Request) -> bytes:
     declared = request.headers.get("content-length")
     if declared is not None and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
@@ -41,7 +50,7 @@ async def _read_body(request: Request) -> bytes:
 
 def _parse_json(raw: bytes) -> Any:
     try:
-        return json.loads(raw, parse_constant=_reject_constant)
+        return json.loads(raw, parse_constant=_reject_constant, parse_float=_finite_float)
     except (ValueError, RecursionError):
         raise _HttpError(422, "body is not valid JSON") from None
 
@@ -64,8 +73,10 @@ def _idempotency_key(request: Request) -> str | None:
 
 def _source_ip(request: Request) -> str | None:
     forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    if forwarded:
-        return forwarded
+    try:
+        return str(ipaddress.ip_address(forwarded))
+    except ValueError:
+        pass
     return request.client.host if request.client else None
 
 

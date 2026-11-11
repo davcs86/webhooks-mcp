@@ -19,7 +19,58 @@ async def test_typed_post_stores_and_returns_201(ingest, store):
 async def test_source_ip_falls_back_to_socket_peer(ingest, store):
     r = await ingest.post("/hooks", json={"event_name": "a.b", "payload": 1})
     e = await store.get(r.json()["event_id"])
-    assert e.source_ip is not None
+    assert e.source_ip == "127.0.0.1"
+
+
+@pytest.mark.parametrize("xff", ["garbage", "x" * 12_000, "1.2.3.4.5", "999.1.1.1"])
+async def test_invalid_forwarded_for_falls_back_to_peer(ingest, store, xff):
+    r = await ingest.post(
+        "/hooks", json={"event_name": "a.b", "payload": 1}, headers={"X-Forwarded-For": xff}
+    )
+    assert (await store.get(r.json()["event_id"])).source_ip == "127.0.0.1"
+
+
+@pytest.mark.parametrize(
+    ("xff", "stored"),
+    [("203.0.113.9", "203.0.113.9"), ("2001:db8::1, 10.0.0.1", "2001:db8::1")],
+)
+async def test_valid_forwarded_for_is_stored(ingest, store, xff, stored):
+    r = await ingest.post(
+        "/hooks", json={"event_name": "a.b", "payload": 1}, headers={"X-Forwarded-For": xff}
+    )
+    assert (await store.get(r.json()["event_id"])).source_ip == stored
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"event_name":"a.b","payload":1e999}',
+        b'{"event_name":"a.b","payload":-1e999}',
+        b'{"event_name":"a.b","payload":{"x":[1,{"y":1e999}]}}',
+        b'{"event_name":"a.b","payload":[-1e999]}',
+    ],
+)
+async def test_typed_rejects_non_finite_numbers(ingest, body):
+    r = await ingest.post("/hooks", content=body)
+    assert r.status_code == 422 and "error" in r.json()
+
+
+@pytest.mark.parametrize("body", [b"1e999", b"-1e999", b'{"a":{"b":[1e999]}}'])
+async def test_minted_rejects_non_finite_numbers(ingest, store, body):
+    m = await store.mint("job")
+    r = await ingest.post(f"/hooks/{m.event_name}", content=body)
+    assert r.status_code == 422 and "error" in r.json()
+
+
+async def test_deeply_nested_body_is_422(ingest):
+    body = b'{"event_name":"a.b","payload":' + b"[" * 100_000 + b"]" * 100_000 + b"}"
+    r = await ingest.post("/hooks", content=body)
+    assert r.status_code == 422 and "error" in r.json()
+
+
+async def test_lone_surrogate_is_422(ingest):
+    r = await ingest.post("/hooks", content=rb'{"event_name":"a.b","payload":"\ud800"}')
+    assert r.status_code == 422 and "error" in r.json()
 
 
 async def test_payload_stored_compact(ingest, store):
