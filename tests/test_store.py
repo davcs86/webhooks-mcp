@@ -88,7 +88,7 @@ async def test_names_counts_sorted_by_name(store):
     await store.insert("b.x", "1", None, None)
     await store.insert("a.x", "1", None, None)
     await store.insert("b.x", "2", None, None)
-    assert await store.names() == [("a.x", 1), ("b.x", 2)]
+    assert await store.names() == ([("a.x", 1), ("b.x", 2)], False)
 
 
 async def test_wait_returns_immediately_when_events_exist(store):

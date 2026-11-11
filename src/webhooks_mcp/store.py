@@ -15,14 +15,20 @@ from typing import Any
 
 from webhooks_mcp.constants import (
     EVENT_TTL,
+    LIST_NAMES_LIMIT,
     MAX_EVENTS_PER_NAME,
     MAX_STORE_BYTES,
+    MINTED_PREFIX,
     WAIT_RESULT_LIMIT,
 )
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _BASE32 = "abcdefghijklmnopqrstuvwxyz234567"
 _COLUMNS = "seq, event_id, event_name, payload, payload_bytes, received_at, source_ip"
+_INLINE_COLUMNS = (
+    "seq, event_id, event_name, CASE WHEN payload_bytes <= ? THEN payload END,"
+    " payload_bytes, received_at, source_ip"
+)
 _META_COLUMNS = "seq, event_id, event_name, payload_bytes, received_at, source_ip"
 
 _SCHEMA = """
@@ -81,7 +87,8 @@ class Minted:
 
 def _event(row: tuple) -> Event:
     seq, event_id, name, payload, size, received_at, source_ip = row
-    return Event(seq, event_id, name, json.loads(payload), size, received_at, source_ip)
+    parsed = None if payload is None else json.loads(payload)
+    return Event(seq, event_id, name, parsed, size, received_at, source_ip)
 
 
 def _sum_bytes(db: sqlite3.Connection) -> int:
@@ -237,23 +244,40 @@ class EventStore:
 
         return await self._run(_get)
 
-    async def list(self, event_name: str, after_seq: int, limit: int) -> list[Event]:
+    async def list(
+        self, event_name: str, after_seq: int, limit: int, *, inline_max_bytes: int | None = None
+    ) -> list[Event]:
+        """With inline_max_bytes, payloads larger than it are not read and come back as None."""
+        if inline_max_bytes is None:
+            columns, params = _COLUMNS, (event_name, after_seq, limit)
+        else:
+            columns, params = _INLINE_COLUMNS, (inline_max_bytes, event_name, after_seq, limit)
+
         def _list(db: sqlite3.Connection) -> list[Event]:
             rows = db.execute(
-                f"SELECT {_COLUMNS} FROM events WHERE event_name = ? AND seq > ?"
+                f"SELECT {columns} FROM events WHERE event_name = ? AND seq > ?"
                 " ORDER BY seq ASC LIMIT ?",
-                (event_name, after_seq, limit),
+                params,
             ).fetchall()
             return [_event(r) for r in rows]
 
         return await self._run(_list)
 
-    async def wait(self, event_name: str, after_seq: int, timeout_s: float) -> list[Event]:
+    async def wait(
+        self,
+        event_name: str,
+        after_seq: int,
+        timeout_s: float,
+        *,
+        inline_max_bytes: int | None = None,
+    ) -> list[Event]:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout_s
         async with self._cond:
             while True:
-                found = await self.list(event_name, after_seq, WAIT_RESULT_LIMIT)
+                found = await self.list(
+                    event_name, after_seq, WAIT_RESULT_LIMIT, inline_max_bytes=inline_max_bytes
+                )
                 if found:
                     return found
                 remaining = deadline - loop.time()
@@ -264,18 +288,22 @@ class EventStore:
                 except TimeoutError:
                     return []
 
-    async def names(self) -> list[tuple[str, int]]:
-        def _names(db: sqlite3.Connection) -> list[tuple[str, int]]:
+    async def names(self) -> tuple[list[tuple[str, int]], bool]:
+        """At most LIST_NAMES_LIMIT (name, count) pairs by name, and whether more exist."""
+
+        def _names(db: sqlite3.Connection) -> tuple[list[tuple[str, int]], bool]:
             rows = db.execute(
                 "SELECT event_name, COUNT(*) FROM events GROUP BY event_name ORDER BY event_name"
+                " LIMIT ?",
+                (LIST_NAMES_LIMIT + 1,),
             ).fetchall()
-            return [(name, count) for name, count in rows]
+            return [(n, c) for n, c in rows[:LIST_NAMES_LIMIT]], len(rows) > LIST_NAMES_LIMIT
 
         return await self._run(_names)
 
     async def mint(self, label: str) -> Minted:
         suffix = "".join(secrets.choice(_BASE32) for _ in range(12))
-        name = f"minted.{label}-{suffix}"
+        name = f"{MINTED_PREFIX}{label}-{suffix}"
         if not is_valid_event_name(name):
             raise ValueError("label does not form a valid event name")
         now = self._clock()

@@ -10,11 +10,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from webhooks_mcp.constants import MAX_BODY_BYTES
+from webhooks_mcp.constants import MAX_BODY_BYTES, MAX_IDEMPOTENCY_KEY_CHARS, MINTED_PREFIX
 from webhooks_mcp.store import EventStore, is_valid_event_name
-
-_MINTED_PREFIX = "minted."
-_MAX_IDEMPOTENCY_KEY_CHARS = 255
 
 
 class _HttpError(Exception):
@@ -66,7 +63,7 @@ def _compact(value: Any) -> str:
 
 def _idempotency_key(request: Request) -> str | None:
     key = request.headers.get("idempotency-key") or None
-    if key is not None and len(key) > _MAX_IDEMPOTENCY_KEY_CHARS:
+    if key is not None and len(key) > MAX_IDEMPOTENCY_KEY_CHARS:
         raise _HttpError(422, "Idempotency-Key is too long")
     return key
 
@@ -100,8 +97,8 @@ def build_ingest_app(store: EventStore) -> Starlette:
             name = body.get("event_name")
             if not isinstance(name, str) or not is_valid_event_name(name):
                 raise _HttpError(422, "event_name is missing or invalid")
-            if name.startswith(_MINTED_PREFIX):
-                raise _HttpError(422, "event_name may not use the minted. prefix")
+            if name.startswith(MINTED_PREFIX):
+                raise _HttpError(422, f"event_name may not use the {MINTED_PREFIX} prefix")
             if "payload" not in body:
                 raise _HttpError(422, "payload is required")
             payload_json = _compact(body["payload"])
