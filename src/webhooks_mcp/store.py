@@ -13,7 +13,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from webhooks_mcp.constants import EVENT_TTL, MAX_EVENTS_PER_NAME, WAIT_RESULT_LIMIT
+from webhooks_mcp.constants import (
+    EVENT_TTL,
+    MAX_EVENTS_PER_NAME,
+    MAX_STORE_BYTES,
+    WAIT_RESULT_LIMIT,
+)
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _BASE32 = "abcdefghijklmnopqrstuvwxyz234567"
@@ -78,6 +83,42 @@ def _event(row: tuple) -> Event:
     return Event(seq, event_id, name, json.loads(payload), size, received_at, source_ip)
 
 
+def _sum_bytes(db: sqlite3.Connection) -> int:
+    return db.execute("SELECT COALESCE(SUM(payload_bytes), 0) FROM events").fetchone()[0]
+
+
+def _trim_name(db: sqlite3.Connection, event_name: str) -> int:
+    over = db.execute(
+        "SELECT seq, payload_bytes FROM events WHERE event_name = ?"
+        " ORDER BY seq DESC LIMIT -1 OFFSET ?",
+        (event_name, MAX_EVENTS_PER_NAME),
+    ).fetchall()
+    if not over:
+        return 0
+    db.execute(
+        "DELETE FROM events WHERE event_name = ? AND seq <= ?",
+        (event_name, max(s for s, _ in over)),
+    )
+    return sum(size for _, size in over)
+
+
+def _evict_oldest(db: sqlite3.Connection, keep_seq: int, excess: int) -> int:
+    if excess <= 0:
+        return 0
+    freed, last = 0, None
+    cur = db.execute(
+        "SELECT seq, payload_bytes FROM events WHERE seq < ? ORDER BY seq", (keep_seq,)
+    )
+    for seq, size in cur:
+        freed, last = freed + size, seq
+        if freed >= excess:
+            break
+    cur.close()
+    if last is not None:
+        db.execute("DELETE FROM events WHERE seq <= ?", (last,))
+    return freed
+
+
 class EventStore:
     def __init__(self, path: Path, clock: Callable[[], datetime] = utcnow) -> None:
         self._path = path
@@ -87,17 +128,22 @@ class EventStore:
         self._write_lock = threading.Lock()
         self._cond = asyncio.Condition()
         self._inflight: set[asyncio.Future] = set()
+        # Sum of payload_bytes over all events; read and written only under the write lock.
+        self._total_bytes = 0
 
     async def open(self) -> None:
         def _open() -> sqlite3.Connection:
             db = sqlite3.connect(self._path, check_same_thread=False)
             try:
+                # Only takes effect before the first table exists; an existing file keeps its mode.
+                db.execute("PRAGMA auto_vacuum = INCREMENTAL")
                 mode = db.execute("PRAGMA journal_mode=WAL").fetchone()[0]
                 if str(mode).lower() != "wal":
                     raise sqlite3.OperationalError(f"could not enable wal mode (got {mode})")
                 db.execute("PRAGMA temp_store = MEMORY")  # read-only root fs: no temp files
                 db.executescript(_SCHEMA)
                 db.commit()
+                self._total_bytes = _sum_bytes(db)
             except BaseException:
                 db.close()
                 raise
@@ -142,23 +188,29 @@ class EventStore:
 
         def _insert(db: sqlite3.Connection) -> tuple[Event, bool]:
             with db:
-                return _insert_row(db)
+                event, duplicate, delta = _insert_row(db)
+            # Applied only after commit, so a rolled-back insert leaves the total untouched.
+            self._total_bytes += delta
+            return event, duplicate
 
-        def _insert_row(db: sqlite3.Connection) -> tuple[Event, bool]:
+        def _insert_row(db: sqlite3.Connection) -> tuple[Event, bool, int]:
             if idempotency_key is not None:
                 row = db.execute(
                     f"SELECT {_COLUMNS} FROM events WHERE event_name = ? AND idempotency_key = ?",
                     (event_name, idempotency_key),
                 ).fetchone()
                 if row is not None:
-                    return _event(row), True
+                    return _event(row), True, 0
             cur = db.execute(
                 "INSERT INTO events (event_id, event_name, payload, payload_bytes, received_at,"
                 " source_ip, idempotency_key) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (event_id, event_name, payload_json, size, received_at, source_ip, idempotency_key),
             )
-            row = db.execute(f"SELECT {_COLUMNS} FROM events WHERE seq = ?", (cur.lastrowid,))
-            return _event(row.fetchone()), False
+            seq = cur.lastrowid
+            delta = size - _trim_name(db, event_name)
+            delta -= _evict_oldest(db, seq, self._total_bytes + delta - MAX_STORE_BYTES)
+            row = db.execute(f"SELECT {_COLUMNS} FROM events WHERE seq = ?", (seq,))
+            return _event(row.fetchone()), False, delta
 
         async def _insert_and_notify() -> tuple[Event, bool]:
             result = await self._run(_insert)
@@ -265,5 +317,8 @@ class EventStore:
                     "  AS rn FROM events) WHERE rn > ?)",
                     (MAX_EVENTS_PER_NAME,),
                 )
+                total = _sum_bytes(db)
+            self._total_bytes = total
+            db.execute("PRAGMA incremental_vacuum").fetchall()
 
         await self._run(_sweep)
