@@ -304,43 +304,41 @@ orchestrator context can resume from this file alone.
 
 ## 10. Status
 
-Last updated 2026-11-11 21:00 UTC. Per-task detail lives in the PRs; this table is the cross-repo record.
+Last updated 2026-11-12 04:50 UTC. Per-task detail lives in the PRs; this table is the cross-repo record.
 
 | Item | State | Evidence |
 |---|---|---|
 | Spec approved | done | owner, 2026-11-11 |
-| PR #1 (spec + plans) merged | done | `ad7e0ec` |
-| D1 answered | done | (a), owner, 2026-11-11 |
-| Merge authorisation | done | owner, 2026-11-11 |
-| W1.T1 store | done | reviewed; fix round 1 |
-| W1.T2 ingest app | done | reviewed; 2 fix rounds |
-| W1.T3 MCP app | done | reviewed; fix round 1 |
-| W1.T4 process + sweep | done | reviewed clean |
-| W1.T5 image + CI | done | reviewed; CI built the image and `smoke: ok` on `4e472cc` |
-| W1 PR #2 merged | done — **early** | owner merged at `ee8d834`, before the final-review fixes; `main` (`1e328dc`) has the three memory/disk findings — its image must not be deployed |
-| W1 final whole-branch review | done | 3 Important fixed in PR #3, re-reviewed; residual fix `696d86d` |
-| W1 PR #3 (memory and disk bounds) | open — **blocked on CI** | GitHub Actions outage: runs queued since 20:31 UTC; local suite 155 passed, 2 skipped |
-| G1 digest | pending | needs PR #3 merged and its `main` run |
-| W2.E1 service + secret | done | reviewed; CI `secrets` green |
-| W2.E2 Caddy | done | reviewed; CI `caddy` green on `636dd20` |
-| W2.E3 monitoring + names | done | reviewed; fix round 1 |
-| W2 PR #54 | open | only `lint` red: waits on owner `init-secrets` |
-| W2.E4 docs + pin scaffolding | in progress | stacked branch `…-e4` on PR #54 |
-| W2.E4 final digest pin | blocked on G1 | one-line change |
-| G2 live on edge | pending | owner steps below |
-| W3 session | running | feature 334, `feature/webhook-fanout-callback`, executing steps |
-| W3.S7 staging e2e | blocked on G2 | |
-| G3 publisher released | pending | |
+| W1 listener (T1–T5) | done | webhooks-mcp #2, #3 (memory and disk bounds), #5; `main` at `64c15cc` |
+| G1 image | done | `ghcr.io/davcs86/webhooks-mcp@sha256:09e1e5f210373c4e323e39779739bc48499e1f1d658e00873a0e83f798be6617`, public |
+| W2 edge (E1–E4) | done | homelab-edge #54 (with #55 folded in), #56–#58 |
+| G2 live on edge | done | deploy run 43128108614: certificate issued, all roles applied; `POST /mcp` without a key → 401, every other public path → 404; MCP tools exercised from a connected session |
+| W3 publisher (feature 334) | done | xstockstrat #1523 in `main-dev` (`9d45f20`), deployed to homelab staging |
+| W3.S7 staging end-to-end | **passed (delivery)** | see below |
+| G3 production | pending — owner | promote `main-dev` → `main`; set the production allowlist to `webhooks.ts.<domain>` (443) |
+
+### Staging end-to-end, 2026-11-12
+
+Staging `notify` `webhook.allowed_origins` = `webhooks.ts.<domain>:8443`.
+
+| Check | Result |
+|---|---|
+| `trigger_backfill` with a callback while the allowlist was empty | `INVALID_ARGUMENT: callback_url rejected: origin_not_allowed`, no job |
+| Minted URL: `mint_webhook_url` → `trigger_backfill(callback_url=urls.staging)` → `wait_for_event` | event received 4.6 s after the job completed; `payload.event_name` = `ingest.backfill.completed`, `payload.payload.data.job_id` = the job, `environment` = `staging`, `source_ip` = the staging VM's tailnet address |
+| Exactly once | a second `wait_for_event` after that cursor returned nothing in 20 s |
+| Typed URL: `callback_url=…:8443/hooks` → `wait_for_event("ingest.backfill.completed")` | event received under the typed name; stored payload is the envelope's `payload` |
+| `get_event`, `list_events`, `list_event_names`, bad label, unknown id | as specified |
+
+**Not run:** the notify-down case (stop notify, finish a backfill, start notify, receive exactly once). It needs
+shell access to the staging VM. The hand-off retry is covered by the feature's own tests only.
 
 ### Owner steps outstanding
 
-1. Run **Actions → init-secrets** with `fill_missing` on the homelab-edge branch
-   `claude/webhook-listener-mcp-ltjc1r` (the workflow pushes to the ref it is dispatched on).
-2. Cloudflare, DNS-only: `webhooks-mcp` **A** → the droplet's reserved IPv4;
-   `_acme-challenge.webhooks-mcp` **CNAME** → `webhooks-mcp.acme.<domain>`.
-3. Widen the deSEC token to the fourth TXT RRset, `webhooks-mcp`.
-4. Set the GHCR package `webhooks-mcp` to **public** (it exists since the PR #2 merge).
-5. After the edge PRs merge: `deploy`, then `verify`; add the Claude.ai connector with the bearer header.
+1. Production: promote xstockstrat `main-dev` → `main`, then set production `notify` `webhook.allowed_origins` to
+   `webhooks.ts.<domain>` (port 443).
+2. Optional: run the notify-down case on staging.
+3. Unrelated to this project but red in `verify`: the home backup host is not a tailnet node, so
+   `edge-backup.service` cannot resolve it.
 
 ### Deviations from this plan, as executed
 
