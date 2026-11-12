@@ -26,7 +26,7 @@ are stored in SQLite under `DATA_DIR`; AI agents read them over MCP (Streamable 
 ## Release
 
 Merging to `main` deploys **nothing**. CI builds, smoke-tests and pushes `ghcr.io/davcs86/webhooks-mcp:<sha>`
-and prints `ghcr.io/davcs86/webhooks-mcp@sha256:…` in the `image` job's summary; the edge keeps running the
+(and moves the tag `main` to it) and prints `ghcr.io/davcs86/webhooks-mcp@sha256:…` in the `image` job's summary; the edge keeps running the
 digest pinned in `davcs86/homelab-edge` until that pin is changed.
 
 A change is live only after a second PR, in `davcs86/homelab-edge`:
