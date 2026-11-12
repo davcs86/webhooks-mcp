@@ -110,7 +110,9 @@ docker run -d --name wm --read-only --cap-drop ALL --security-opt no-new-privile
 ## Release
 
 Merging to `main` publishes `ghcr.io/davcs86/webhooks-mcp:<sha>` and prints the digest
-(`ghcr.io/davcs86/webhooks-mcp@sha256:…`) in the CI job summary. Deployments pin that digest.
+(`ghcr.io/davcs86/webhooks-mcp@sha256:…`) in the CI job summary. Deployments pin that digest, so a merge here changes nothing until the pin
+is bumped where the service is deployed (for the homelab edge: `webhooks_mcp_image` in `davcs86/homelab-edge`,
+see `CLAUDE.md` § Release).
 
 GHCR creates the package private on first push. The repo owner must set it to public once, because the
 edge pulls it without a credential.
