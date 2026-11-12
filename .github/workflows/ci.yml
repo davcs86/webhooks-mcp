@@ -35,7 +35,7 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - run: docker build -t webhooks-mcp:ci .
+      - run: docker build --label "org.opencontainers.image.revision=${GITHUB_SHA}" -t webhooks-mcp:ci .
       - run: scripts/smoke.sh webhooks-mcp:ci
       - name: Push to GHCR and print the digest
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -46,6 +46,9 @@ jobs:
           ref="ghcr.io/davcs86/webhooks-mcp:${GITHUB_SHA}"
           docker tag webhooks-mcp:ci "$ref"
           docker push "$ref"
+          # Moving tag: deployments pin by digest and use this only to discover the newest build.
+          docker tag webhooks-mcp:ci ghcr.io/davcs86/webhooks-mcp:main
+          docker push ghcr.io/davcs86/webhooks-mcp:main
           sha="$(docker inspect --format '{{index .RepoDigests 0}}' "$ref")"
           digest="ghcr.io/davcs86/webhooks-mcp@${sha##*@}"
           echo "$digest"
