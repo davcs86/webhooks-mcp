@@ -29,16 +29,19 @@ Merging to `main` deploys **nothing**. CI builds, smoke-tests and pushes `ghcr.i
 (and moves the tag `main` to it) and prints `ghcr.io/davcs86/webhooks-mcp@sha256:…` in the `image` job's summary; the edge keeps running the
 digest pinned in `davcs86/homelab-edge` until that pin is changed.
 
-A change is live only after a second PR, in `davcs86/homelab-edge`:
+A change is live only after a second PR, in `davcs86/homelab-edge`, that pins the new digest:
 
-1. Wait for the `main` run of the merge here and copy the digest from the `image` job.
-2. In `homelab-edge`, replace the digest of `webhooks_mcp_image` in
-   `inventories/prod/group_vars/all/versions.yml` and update its row in `docs/versions.md` (same PR).
+1. That repo's `bump-webhooks-mcp` workflow opens it: daily, or at once with **Actions → bump-webhooks-mcp → Run
+   workflow** there. It keeps one branch (`bump/webhooks-mcp`) and one open PR, updated to the newest digest.
+2. Only if it has not: replace the digest of `webhooks_mcp_image` in
+   `inventories/prod/group_vars/all/versions.yml` and update its row in `docs/versions.md` (same PR), using
+   the digest from the `image` job of the `main` run here.
 3. After that PR merges, the owner runs **Actions → deploy** (`tailnet`) there. Stored events survive: the
    data volume is kept.
 
-Open that PR whenever the image content changed (`src/`, `Dockerfile`, `pyproject.toml`, `uv.lock`). A docs-,
-test- or CI-only merge needs none. When you finish a change here, say in your report whether the edge PR is
-needed and whether you opened it; if `homelab-edge` is not attached to your session, say that instead.
+Every merge to `main` publishes a new digest, so the bump PR also appears after a docs-, test- or CI-only
+merge; that one changes nothing on the edge and can wait for the next real change. When you finish a change
+here, say in your report whether the image content changed (`src/`, `Dockerfile`, `pyproject.toml`, `uv.lock`)
+and that the edge still needs the bump PR merged and a deploy; do not open a second bump PR by hand.
 
 The base image and uv are pinned by digest/version in `Dockerfile` and `ci.yml`; bump them deliberately.
