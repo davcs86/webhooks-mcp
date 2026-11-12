@@ -46,6 +46,7 @@ jobs:
           ref="ghcr.io/davcs86/webhooks-mcp:${GITHUB_SHA}"
           docker tag webhooks-mcp:ci "$ref"
           docker push "$ref"
-          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$ref")"
+          sha="$(docker inspect --format '{{index .RepoDigests 0}}' "$ref")"
+          digest="ghcr.io/davcs86/webhooks-mcp@${sha##*@}"
           echo "$digest"
           echo "$digest" >> "$GITHUB_STEP_SUMMARY"
