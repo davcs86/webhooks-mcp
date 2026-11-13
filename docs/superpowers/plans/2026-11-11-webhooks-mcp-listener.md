@@ -1,5 +1,8 @@
 # webhooks-mcp Listener Implementation Plan (W1)
 
+> **Status: executed (PRs #2, #3, #5).** Historical record; the code and `CLAUDE.md` are authoritative now.
+> Do not follow the worker instructions below.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A single container that stores webhooks POSTed to it and serves them to agents over MCP.
