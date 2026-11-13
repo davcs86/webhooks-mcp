@@ -1,5 +1,8 @@
 # webhooks-mcp — Orchestration Plan
 
+> **Status: executed (2026-11-12).** Historical record of how the first version shipped. Current contracts:
+> `docs/contracts.md`; release procedure: `docs/release.md`. Do not follow the worker instructions below.
+
 > **For agentic workers:** this is the plan the **orchestrator** runs. It does not write product code;
 > it spawns workers, enforces gates, merges, and keeps the status table current. Workers get one task
 > each and use superpowers:subagent-driven-development conventions (fresh implementer, fresh reviewer).
@@ -48,20 +51,8 @@ W1 and W2 are small, and their tasks share interfaces the orchestrator must see 
 
 ## 2. Frozen contracts
 
-These are the only things one workstream needs from another. Changing any of them means: stop every
-workstream, amend the spec, get the owner's approval, restart from the affected tasks.
-
-| # | Contract | Value | Producer → consumers |
-|---|---|---|---|
-| C1 | MCP listener | container port `9100`, `POST /mcp`, `GET /healthz`; `Authorization: Bearer <key>`; 401 without it | W1 → W2 |
-| C2 | Ingest listener | container port `9101`, `POST /hooks`, `POST /hooks/{name}`, `GET /healthz` | W1 → W2, W3 |
-| C3 | Ingest responses | 201 `{event_id, duplicate:false}`, 200 `{…duplicate:true}`, 404, 413, 422, and 503 when over the concurrency limit — retry (spec 6.2) | W1 → W3 |
-| C4 | Container env | `MCP_AUTH_KEY`, `INGEST_BASE_URLS` (JSON map), `DATA_DIR=/data` | W1 → W2 |
-| C5 | Client address | Ingest reads the first address of `X-Forwarded-For` as `source_ip` | W2 → W1 |
-| C6 | Body cap | 256 KiB at the listener; Caddy's cap on the ingest host equals it | W1 ↔ W2 |
-| C7 | Image | `ghcr.io/davcs86/webhooks-mcp@sha256:<digest>`, public | W1 → W2 |
-| C8 | Hostnames | MCP `webhooks-mcp.<domain>`; ingest `webhooks.ts.<domain>` on 443 and 8443 | W2 → W3, owner |
-| C9 | Wire format | spec 8.3: JSON envelope plus `Idempotency-Key` header | W3 → W1 |
+Moved to `docs/contracts.md` (same table, C1–C9, with W1/W2/W3 named by repo). That file is the single source
+of truth; changing any row still means: stop, amend the spec, get the owner's approval.
 
 ## 3. Branches and merging
 

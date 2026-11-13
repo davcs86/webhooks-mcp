@@ -1,6 +1,7 @@
 # webhooks-mcp — design
 
-Date: 2026-11-11. Status: approved by the owner.
+Date: 2026-11-11. Status: approved by the owner; implemented and deployed (2026-11-12). Section 6 is the
+rationale for the listener's behaviour; the frozen contract values live in `docs/contracts.md`.
 
 Spans three repositories: `davcs86/webhooks-mcp` (the service), `davcs86/homelab-edge` (its deployment
 on the edge droplet), `davcs86/xstockstrat` (the first publisher).
@@ -358,9 +359,9 @@ Each step is usable on its own: after step 2 any tailnet service can already pub
 - Names of the new xstockstrat config keys, tables and the SDD slug.
 - Caddy rate-limit values for the ingest host.
 
-## 11. Resume state (as of 2026-11-11)
+## 11. Resume state (as of 2026-11-11) — superseded
 
-Read this section first when picking the work up in a fresh context.
+Historical: the session state before any code existed. Everything below has shipped; do not resume from it.
 
 **Where things stand.** Design **approved by the owner (2026-11-11)**. Implementation plans are in
 `docs/superpowers/plans/`: `2026-11-11-orchestration.md` (start there — it holds the status table and
