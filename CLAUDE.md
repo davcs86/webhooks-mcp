@@ -1,3 +1,32 @@
+<!-- context-forge:behavioral-contract:start -->
+## How to Act
+
+Read this first — it governs *how* you work here; everything below is the *what* you work with.
+These four behaviors are the operating defaults; the rest of this file (and the constitution) is
+context you load per task.
+
+1. **Don't assume — ask, and surface tradeoffs.** Before acting, always list every assumption you
+   are making on your own — scope, interpretation, defaults, a choice between options — each with
+   its basis, or say "none". On ambiguity, a missing detail, or a design fork, stop and raise it.
+   *Red flag:* "it's obvious" / "too small to ask" — that *is* the assumption; list it.
+   *(Enforced by the cross-repo contracts `docs/contracts.md` C1–C9 and **WM-08/WM-09**, where a silent guess
+   breaks the edge or the publisher.)*
+2. **Write the minimum that solves the stated problem.** Nothing speculative — no abstraction,
+   option, or "while I'm here" scaffolding. *Red flag:* "might need it later", "for flexibility".
+   *(Enforced by **WM-03**: the 192 MB budget punishes speculative buffering.)*
+3. **Touch only what the task requires.** Surgical, auditable diffs; clean up only orphans *you*
+   introduced. *Red flag:* "cleaner if I also…" — propose it, don't do it.
+   *(Enforced by **WM-01/WM-02/WM-06**: store refactors break locking, schema and cap parity.)*
+4. **Define success up front, then loop until verified.** State the pass condition before you
+   start; claim done only with the check's output from this session in hand.
+   *Red flag:* "should work", "looks right", "probably passes".
+   *(Enforced by `uv run pytest -W error`, `uv lock --check` and `scripts/smoke.sh`; **WM-04** keeps the cap tests honest.)*
+
+No exceptions for small or obvious tasks — honoring the letter while dodging the intent is a violation.
+
+> Litmus test for any future line in this file: *does it shape how the agent thinks (a behavior), or
+> restate a fact the agent can read from the code?* If it's a fact already in the repo, leave it out.
+<!-- context-forge:behavioral-contract:end -->
 # webhooks-mcp — CLAUDE.md
 
 A small Python 3.13 service: one process, two listeners. Webhooks POSTed to the ingest listener (9101)
@@ -44,17 +73,16 @@ Read only the row that matches the task.
 | Any change to a port, path, env var, response code, tool name or wire format | `docs/contracts.md` |
 | Why a behaviour is the way it is (ingestion, tools, storage, retention) | `docs/superpowers/specs/2026-11-11-webhooks-mcp-design.md` §6 |
 | Releasing, bumping the base image or uv, getting a change onto the edge | `docs/release.md` |
+| Codebase invariants (`WM-*`) an edit can silently break beyond the list above — locking, memory budget, cap/test coupling, edge seams — plus the defects/doc-drift log | `docs/context-constitution.md`, `docs/context-constitution-findings.md` |
 | History of how the first version was built across the three repos | `docs/superpowers/plans/` (executed; historical) |
 
 ## Release
 
-Merging to `main` deploys nothing; a change is live only after `davcs86/homelab-edge` pins the new digest and
-is deployed (`docs/release.md`). When you finish a change here, say in your report whether the image content
+When you finish a change here, say in your report whether the image content
 changed (`src/`, `Dockerfile`, `pyproject.toml`, `uv.lock`) and that the edge still needs the bump PR merged and
-a deploy; do not open a bump PR by hand.
+a deploy (`docs/release.md`); do not open a bump PR by hand.
 
 ## Teardown
 
 If a change alters behaviour that `README.md`, `docs/contracts.md` or `docs/release.md` describes, update that
-doc in the same PR. Keep this file to rules and pointers: a fact the code or a linked doc already states does
-not belong here.
+doc in the same PR.
