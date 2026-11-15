@@ -58,12 +58,12 @@ async def test_list_events_empty_keeps_cursor(store):
     assert await list_events(store, "a.b", after_seq=7) == {"events": [], "next_after_seq": 7}
 
 
-async def test_limit_is_clamped(store):
+async def test_page_size_is_clamped(store):
     for i in range(105):
         await store.insert("a.b", str(i), None, None)
-    assert len((await list_events(store, "a.b", limit=0))["events"]) == 1
-    assert len((await list_events(store, "a.b", limit=10_000))["events"]) == 100
-    assert len((await list_events(store, "a.b", after_seq=-3, limit=2))["events"]) == 2
+    assert len((await list_events(store, "a.b", page_size=0))["events"]) == 1
+    assert len((await list_events(store, "a.b", page_size=10_000))["events"]) == 100
+    assert len((await list_events(store, "a.b", after_seq=-3, page_size=2))["events"]) == 2
 
 
 @pytest.mark.parametrize("bad", ["", "Bad Name", "a" * 129])
@@ -166,6 +166,8 @@ async def test_correct_key_reaches_mcp(mcp_http, auth):
     assert r.json()["result"]["serverInfo"]["name"]
     r = await mcp_http.post("/mcp", json=rpc("tools/list", id_=2), headers=h)
     assert {t["name"] for t in r.json()["result"]["tools"]} == TOOLS
+    listed = next(t for t in r.json()["result"]["tools"] if t["name"] == "list_events")
+    assert set(listed["inputSchema"]["properties"]) == {"event_name", "after_seq", "page_size"}
 
 
 async def test_tool_call_round_trip(mcp_http, auth, store):
@@ -225,7 +227,7 @@ async def test_list_events_does_not_load_payloads_it_will_not_inline(store):
         await store.insert("a.b", big, None, None)
     tracemalloc.start()
     try:
-        r = await list_events(store, "a.b", limit=100)
+        r = await list_events(store, "a.b", page_size=100)
         peak = tracemalloc.get_traced_memory()[1]
     finally:
         tracemalloc.stop()

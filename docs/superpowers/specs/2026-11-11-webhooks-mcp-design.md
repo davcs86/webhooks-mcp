@@ -144,7 +144,7 @@ Every MCP request needs `Authorization: Bearer <MCP_AUTH_KEY>`, compared in cons
 
 | Tool | Purpose |
 |---|---|
-| `list_events(event_name, after_seq=0, limit=20)` | Events for a name, oldest first, from a cursor |
+| `list_events(event_name, after_seq=0, page_size=20)` | Events for a name, oldest first, from a cursor |
 | `get_event(event_id)` | One event with its full payload |
 | `wait_for_event(event_name, after_seq=0, timeout_s=25)` | Returns as soon as an event newer than the cursor exists, or empty at timeout (max 25 s) |
 | `mint_webhook_url(label)` | Returns `{event_name, urls, expires_at}`; `urls` has one entry per configured ingest base (6.5) |

@@ -60,12 +60,14 @@ def _check_name(event_name: str) -> None:
 
 
 async def list_events(
-    store: EventStore, event_name: str, after_seq: int = 0, limit: int = DEFAULT_PAGE_SIZE
+    store: EventStore, event_name: str, after_seq: int = 0, page_size: int = DEFAULT_PAGE_SIZE
 ) -> dict[str, Any]:
     _check_name(event_name)
     after_seq = _cursor(after_seq)
-    limit = min(max(limit, 1), LIST_MAX_LIMIT)
-    events = await store.list(event_name, after_seq, limit, inline_max_bytes=INLINE_PAYLOAD_BYTES)
+    page_size = min(max(page_size, 1), LIST_MAX_LIMIT)
+    events = await store.list(
+        event_name, after_seq, page_size, inline_max_bytes=INLINE_PAYLOAD_BYTES
+    )
     return _page(events, after_seq)
 
 
@@ -122,9 +124,9 @@ def _build_server(store: EventStore, settings: Settings) -> MCPServer:
         ),
     )
     async def _list_events(
-        event_name: str, after_seq: int = 0, limit: int = DEFAULT_PAGE_SIZE
+        event_name: str, after_seq: int = 0, page_size: int = DEFAULT_PAGE_SIZE
     ) -> dict[str, Any]:
-        return await list_events(store, event_name, after_seq, limit)
+        return await list_events(store, event_name, after_seq, page_size)
 
     @server.tool(
         name="get_event",
