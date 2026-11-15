@@ -15,13 +15,12 @@ from webhooks_mcp.constants import (
     INGEST_MAX_CONCURRENT_REQUESTS,
     KEEP_ALIVE_SECONDS,
     MAX_CONCURRENT_REQUESTS,
+    READY_POLL_SECONDS,
     SWEEP_INTERVAL_SECONDS,
 )
 from webhooks_mcp.ingest_app import build_ingest_app
 from webhooks_mcp.mcp_app import build_mcp_app
 from webhooks_mcp.store import EventStore
-
-READY_POLL_SECONDS = 0.02
 
 log = logging.getLogger("webhooks_mcp")
 

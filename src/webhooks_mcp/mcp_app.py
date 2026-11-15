@@ -13,6 +13,7 @@ from starlette.routing import Route
 
 from webhooks_mcp.config import Settings
 from webhooks_mcp.constants import (
+    DEFAULT_PAGE_SIZE,
     INLINE_PAYLOAD_BYTES,
     LIST_MAX_LIMIT,
     LIST_NAMES_LIMIT,
@@ -59,7 +60,7 @@ def _check_name(event_name: str) -> None:
 
 
 async def list_events(
-    store: EventStore, event_name: str, after_seq: int = 0, limit: int = 20
+    store: EventStore, event_name: str, after_seq: int = 0, limit: int = DEFAULT_PAGE_SIZE
 ) -> dict[str, Any]:
     _check_name(event_name)
     after_seq = _cursor(after_seq)
@@ -120,7 +121,9 @@ def _build_server(store: EventStore, settings: Settings) -> MCPServer:
             f"by payload_truncated; fetch them with get_event. {NOTICE}"
         ),
     )
-    async def _list_events(event_name: str, after_seq: int = 0, limit: int = 20) -> dict[str, Any]:
+    async def _list_events(
+        event_name: str, after_seq: int = 0, limit: int = DEFAULT_PAGE_SIZE
+    ) -> dict[str, Any]:
         return await list_events(store, event_name, after_seq, limit)
 
     @server.tool(

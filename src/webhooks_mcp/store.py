@@ -16,14 +16,16 @@ from typing import Any
 from webhooks_mcp.constants import (
     EVENT_TTL,
     LIST_NAMES_LIMIT,
+    MAX_EVENT_NAME_CHARS,
     MAX_EVENTS_PER_NAME,
     MAX_STORE_BYTES,
     MINTED_PREFIX,
+    MINTED_SUFFIX_CHARS,
     ROW_OVERHEAD_BYTES,
     WAIT_RESULT_LIMIT,
 )
 
-_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _BASE32 = "abcdefghijklmnopqrstuvwxyz234567"
 _COLUMNS = "seq, event_id, event_name, payload, payload_bytes, received_at, source_ip"
 _INLINE_COLUMNS = (
@@ -60,7 +62,7 @@ def utcnow() -> datetime:
 
 
 def is_valid_event_name(name: str) -> bool:
-    return _NAME_RE.fullmatch(name) is not None
+    return len(name) <= MAX_EVENT_NAME_CHARS and _NAME_RE.fullmatch(name) is not None
 
 
 def _iso(moment: datetime) -> str:
@@ -139,7 +141,8 @@ class EventStore:
         self._write_lock = threading.Lock()
         self._cond = asyncio.Condition()
         self._inflight: set[asyncio.Future] = set()
-        # Sum over events of payload_bytes + ROW_OVERHEAD_BYTES; touched only under the write lock.
+        # Sum over events of payload_bytes + ROW_OVERHEAD_BYTES.
+        # Set by open at startup; afterwards touched only under the write lock.
         self._total_bytes = 0
 
     async def open(self) -> None:
@@ -305,7 +308,7 @@ class EventStore:
         return await self._run(_names)
 
     async def mint(self, label: str) -> Minted:
-        suffix = "".join(secrets.choice(_BASE32) for _ in range(12))
+        suffix = "".join(secrets.choice(_BASE32) for _ in range(MINTED_SUFFIX_CHARS))
         name = f"{MINTED_PREFIX}{label}-{suffix}"
         if not is_valid_event_name(name):
             raise ValueError("label does not form a valid event name")

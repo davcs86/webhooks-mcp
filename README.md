@@ -25,7 +25,7 @@ curl -X POST http://127.0.0.1:9101/hooks -H 'Content-Type: application/json' \
 # 201 {"event_id":"…","duplicate":false}      (a repeat: 200 with "duplicate":true)
 
 # Minted: the name comes from the URL and the whole body is the payload
-curl -X POST http://127.0.0.1:9101/hooks/minted.demo-3f9a1c -d '{"any":"json"}'
+curl -X POST http://127.0.0.1:9101/hooks/minted.demo-k7q2xw4mzr3p -d '{"any":"json"}'
 ```
 
 | Result | Status |
@@ -95,7 +95,7 @@ docker run -d --name wm --read-only --cap-drop ALL --security-opt no-new-privile
   ghcr.io/davcs86/webhooks-mcp@sha256:<digest>
 ```
 
-`scripts/smoke.sh <image>` runs this and checks the contract end to end. Tests: `uv run pytest`.
+`scripts/smoke.sh <image>` runs this and checks the contract end to end. Tests: `uv lock --check && uv run pytest -W error` (as CI runs them).
 
 ## Security model
 

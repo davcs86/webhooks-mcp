@@ -159,6 +159,15 @@ async def test_sweep_drops_expired_minted_urls(store, clock):
 def test_event_name_validation():
     assert all(is_valid_event_name(n) for n in ["a", "ingest.backfill.completed", "a-b_c.1"])
     assert not any(is_valid_event_name(n) for n in ["", "A.b", ".a", "a/b", "a b", "a" * 129])
+    assert is_valid_event_name("a" * 128)
+
+
+async def test_name_and_suffix_caps_are_read_at_call_time(store, monkeypatch):
+    monkeypatch.setattr("webhooks_mcp.store.MAX_EVENT_NAME_CHARS", 3)
+    monkeypatch.setattr("webhooks_mcp.store.MINTED_SUFFIX_CHARS", 4)
+    assert is_valid_event_name("abc") and not is_valid_event_name("abcd")
+    monkeypatch.setattr("webhooks_mcp.store.MAX_EVENT_NAME_CHARS", 128)
+    assert re.fullmatch(r"minted\.job-[a-z2-7]{4}", (await store.mint("job")).event_name)
 
 
 async def test_open_fails_when_parent_is_not_a_directory(tmp_path):

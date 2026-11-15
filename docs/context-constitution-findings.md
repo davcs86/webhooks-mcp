@@ -8,19 +8,14 @@ re-verifies every open row and retires the rows that no longer reproduce to `## 
 
 ## Documentation that lies (docs claim behavior the code lacks)
 
-| What the docs say | What the code does | Evidence | Suggested action |
-|---|---|---|---|
-| `CLAUDE.md` Rule 2: "No literal TTL, cap or limit elsewhere" | Literal caps remain outside `constants.py`: the event-name length `{0,127}`, the 12-char mint suffix, the default page size `limit=20` (written twice), `_MAX_SEQ`, `READY_POLL_SECONDS`, and the default ports | `src/webhooks_mcp/store.py#_NAME_RE`, `#mint` ("range(12)"), `src/webhooks_mcp/mcp_app.py#list_events`, `#_list_events`, `#_MAX_SEQ`, `src/webhooks_mcp/main.py#READY_POLL_SECONDS`, `#run` | Move the caps (name length, suffix length, page size) to `constants.py`; scope Rule 2 to exclude contract values (ports) and the SQLite ceiling |
-| `CLAUDE.md` invariant: `_total_bytes` "changes only inside `EventStore._run`" | `open` also assigns it, via `to_thread` outside the lock, at startup | `src/webhooks_mcp/store.py#open` ("self._total_bytes = _sum_bytes(db)") | Reword: "outside `open`, changes only inside `_run`" |
-| `README.md` example `POST /hooks/minted.demo-3f9a1c` (6-char hex suffix) | Minted names end in 12 chars from `a-z2-7` | `README.md#Ingestion`, `src/webhooks_mcp/store.py#mint`, `#_BASE32` | Use a realistic example name |
-| `README.md`: "Tests: `uv run pytest`"; `CLAUDE.md#Commands` omits the lock check | CI runs `uv lock --check` and `uv run pytest -W error` | `README.md` ("Tests: `uv run pytest`"), `.github/workflows/ci.yml` ("uv lock --check") | Align both docs with the CI invocation |
+_None open._ The four rows re-verified on 2026-11-15 are under `## Resolved`.
 
 ## Latent bugs (looks broken, not merely non-obvious)
 
 | Issue | Impact | Evidence |
 |---|---|---|
-| No schema migration mechanism: `_SCHEMA` is `CREATE … IF NOT EXISTS` only | The first column change silently never reaches the live `/data/events.db`. The owner wants a migration mechanism before any schema change (WM-02) | `src/webhooks_mcp/store.py#_SCHEMA` |
-| `mint` does not retry on a name collision | An `IntegrityError` on the `minted_urls` PK would surface as an unmapped tool error. The probability is negligible (60-bit suffix) | `src/webhooks_mcp/store.py#mint` |
+| No schema migration mechanism: `_SCHEMA` is `CREATE … IF NOT EXISTS` only | The first column change silently never reaches the live `/data/events.db`. The owner wants a migration mechanism before any schema change (WM-02). Re-verified open on 2026-11-15; deliberately not built yet (owner decision) | `src/webhooks_mcp/store.py#_SCHEMA` |
+| `_LABEL_RE` precompiles `MAX_LABEL_CHARS` at import (WM-04 violation; found 2026-11-15) | Monkeypatching `webhooks_mcp.mcp_app.MAX_LABEL_CHARS` has no effect, so a cap test would silently exercise the real 32. No test patches it today | `src/webhooks_mcp/mcp_app.py#_LABEL_RE` |
 
 ## Dead / orphaned code
 
@@ -40,11 +35,18 @@ _None._ All 19 constants in `constants.py` and all three documented env vars hav
 
 ## Dismissed (won't fix)
 
-_None._
+| Item | Decision and rationale | Date |
+|---|---|---|
+| `mint` does not retry on a `minted_urls` PK collision (`IntegrityError`) | Won't fix. A collision needs two live mints with the same label to draw the same 12-char suffix from a 32-symbol alphabet (32^12 = 2^60 space, sampled from `secrets`). A retry loop, a new constant and a test cost more than the risk is worth. Revisit if `MINTED_SUFFIX_CHARS` is ever shortened | 2026-11-15 |
 
 ## Resolved
 
-_None._
+| Was | Fix | Resolved | How confirmed |
+|---|---|---|---|
+| `CLAUDE.md` Rule 2 vs literal caps outside `constants.py` (`{0,127}`, `range(12)`, `limit=20` ×2, `READY_POLL_SECONDS`, `_MAX_SEQ`, default ports) | Added `MAX_EVENT_NAME_CHARS`, `MINTED_SUFFIX_CHARS`, `DEFAULT_PAGE_SIZE` and `READY_POLL_SECONDS` to `constants.py`. `is_valid_event_name` checks the length at call time instead of baking it into `_NAME_RE`. Rule 2 now names the exceptions: listener ports (contract) and `_MAX_SEQ` (SQLite ceiling) | 2026-11-15 | New `tests/test_store.py#test_name_and_suffix_caps_are_read_at_call_time` (WM-04) and a 128-char boundary assert. The `list_events` MCP input schema is byte-identical before and after (`limit` default 20). `uv run pytest -W error`: 156 passed, 2 skipped |
+| `CLAUDE.md` invariant: `_total_bytes` "changes only inside `_run`" | Reworded to "`open` sets it at startup; after that only inside `_run`". Same fix in the `store.py#__init__` comment | 2026-11-15 | Re-read `store.py#open` (`self._total_bytes = _sum_bytes(db)` in `_open`) against the new wording |
+| `README.md` example `minted.demo-3f9a1c` | Now `minted.demo-k7q2xw4mzr3p` (12 chars, `a-z2-7`) | 2026-11-15 | Matches `tests/test_store.py#test_mint_name_shape_and_activity` (`[a-z2-7]{12}`) |
+| `README.md` "Tests: `uv run pytest`"; `CLAUDE.md#Commands` missing the lock check | Both docs now give `uv lock --check` plus `uv run pytest -W error` | 2026-11-15 | Matches `.github/workflows/ci.yml` (steps `uv lock --check`, `uv run pytest -W error`) |
 
 ---
 _Surfaced by [context-forge](https://github.com/davcs86/agent-plugins). Open items above are defects to
