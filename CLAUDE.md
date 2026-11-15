@@ -36,7 +36,7 @@ Human overview and the full HTTP/MCP surface: `README.md`.
 ## Commands
 
 - Setup (once; tests need the dev extra): `uv sync --extra dev --frozen`
-- Tests: `uv run pytest -W error` (the CI invocation)
+- Tests: `uv lock --check` then `uv run pytest -W error` (the CI invocation)
 - Lint: `uv run ruff check .` and `uv run ruff format --check .`
 - Image check (needs Docker): `docker build -t webhooks-mcp:dev .` then `scripts/smoke.sh webhooks-mcp:dev`
 
@@ -46,6 +46,8 @@ Human overview and the full HTTP/MCP surface: `README.md`.
    `davcs86/homelab-edge` (deployment) and `davcs86/xstockstrat` (publisher). Never change one here
    alone; the values and the change procedure are in `docs/contracts.md`.
 2. **Constants live only in `src/webhooks_mcp/constants.py`.** No literal TTL, cap or limit elsewhere.
+   Exceptions: contract values from `docs/contracts.md` (the listener ports) and fixed platform limits
+   (the SQLite INTEGER ceiling `mcp_app.py#_MAX_SEQ`).
 3. **Ingestion is unauthenticated by design.** Expose port 9101 only to a private network (the tailnet),
    never to the internet. Only the MCP port may sit behind a public proxy.
 4. **Payloads are untrusted third-party data.** Return them only inside a `payload` field and end every
@@ -57,9 +59,9 @@ Human overview and the full HTTP/MCP surface: `README.md`.
 
 - `events.seq` is `INTEGER PRIMARY KEY AUTOINCREMENT` (`store.py#_SCHEMA`): never reused, so `after_seq`
   cursors stay valid across eviction. Keep `AUTOINCREMENT`.
-- `EventStore._total_bytes` mirrors `SUM(payload_bytes) + ROW_OVERHEAD_BYTES × rows`. It changes only inside
-  `EventStore._run` (the write lock) and only after commit; any new path that inserts or deletes events must
-  keep it in step (`store.py#_insert`, `store.py#sweep`).
+- `EventStore._total_bytes` mirrors `SUM(payload_bytes) + ROW_OVERHEAD_BYTES × rows`. `EventStore.open` sets it
+  at startup; after that it changes only inside `EventStore._run` (the write lock) and only after commit. Any
+  new path that inserts or deletes events must keep it in step (`store.py#_insert`, `store.py#sweep`).
 - An insert never evicts its own row (`store.py#_evict_oldest` takes `keep_seq`).
 - Tests inject the clock (`tests/conftest.py#FakeClock`); never read wall time in `store.py` except through
   `self._clock`.
