@@ -1,7 +1,7 @@
 # webhooks-mcp — Constitution Findings
 
-Defects and drift surfaced by `/context-constitution` (context-forge) on 2026-11-14 from branch
-`claude/context-constitution-parity-zggeq3` at commit `80429bf` while deriving the constitution. These are the
+Defects and drift surfaced by `/context-constitution` (context-forge) on 2026-11-14; last refreshed 2026-11-15 from branch
+`claude/context-constitution-parity-zggeq3` at commit `1a7b63c` while deriving the constitution. These are the
 things an agent trusting the docs or the surface would get **wrong**. They are for triage, not governance: a
 defect is not a rule. This log is maintained, not write-only (**CF-N12**). `/context-constitution refresh`
 re-verifies every open row and retires the rows that no longer reproduce to `## Resolved`.
@@ -24,7 +24,7 @@ re-verifies every open row and retires the rows that no longer reproduce to `## 
 
 ## Dead / orphaned code
 
-_None._ All 18 constants in `constants.py` and all three documented env vars have a consumer.
+_None._ All 19 constants in `constants.py` and all three documented env vars have a consumer.
 
 ## Open questions (unresolved *why* — needs a maintainer)
 
