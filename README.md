@@ -45,7 +45,7 @@ Every request needs `Authorization: Bearer <MCP_AUTH_KEY>`; otherwise 401.
 
 | Tool | Purpose |
 |---|---|
-| `list_events(event_name, after_seq=0, limit=20)` | Events for a name, oldest first; `limit` is clamped to 1..100. Returns `{events, next_after_seq}` |
+| `list_events(event_name, after_seq=0, page_size=20)` | Events for a name, oldest first; `page_size` is clamped to 1..100. Returns `{events, next_after_seq}` |
 | `get_event(event_id)` | One event with its full payload; `NOT_FOUND` if unknown |
 | `wait_for_event(event_name, after_seq=0, timeout_s=25)` | Returns once an event newer than `after_seq` exists, or empty at the timeout (at most 25 s) |
 | `mint_webhook_url(label)` | Creates a `minted.<label>-<random>` name; returns `{event_name, urls, expires_at}` with one URL per `INGEST_BASE_URLS` entry. `label`: lowercase letters, digits, hyphens, 1 to 32 characters |
