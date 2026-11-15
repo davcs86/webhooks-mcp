@@ -20,6 +20,3 @@ land the matching change in every consumer named in the last column. Never chang
 Also part of the contract, enforced in code: the MCP tool names and argument names (`list_events`, `get_event`,
 `wait_for_event`, `mint_webhook_url`, `list_event_names`; `src/webhooks_mcp/mcp_app.py#_build_server`), and the
 untrusted-payload notice that ends every tool description (`src/webhooks_mcp/mcp_app.py#NOTICE`).
-
-Extracted verbatim from `docs/superpowers/plans/2026-11-11-orchestration.md` §2 (workstreams W1/W2/W3 renamed to
-their repos), plus the closing paragraph on tool names and the payload notice.

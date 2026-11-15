@@ -78,13 +78,11 @@ Read only the row that matches the task.
 
 ## Release
 
-Merging to `main` deploys nothing; a change is live only after `davcs86/homelab-edge` pins the new digest and
-is deployed (`docs/release.md`). When you finish a change here, say in your report whether the image content
+When you finish a change here, say in your report whether the image content
 changed (`src/`, `Dockerfile`, `pyproject.toml`, `uv.lock`) and that the edge still needs the bump PR merged and
-a deploy; do not open a bump PR by hand.
+a deploy (`docs/release.md`); do not open a bump PR by hand.
 
 ## Teardown
 
 If a change alters behaviour that `README.md`, `docs/contracts.md` or `docs/release.md` describes, update that
-doc in the same PR. Keep this file to rules and pointers: a fact the code or a linked doc already states does
-not belong here.
+doc in the same PR.

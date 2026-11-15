@@ -55,7 +55,7 @@ they are logged as a defect in the findings log, not normalized here.
   `Idempotency-Key`. An agent reading a minted event sent with the typed envelope sees `payload.payload.data`, not
   `payload.data` (spec §8.3, intentional). Evidence: `src/webhooks_mcp/ingest_app.py#minted`.
 - **Byte budget charges a per-row overhead.** Before `696d86d`, tiny events with long Idempotency-Keys could fill
-  about 1000× the budget on disk. Every path that touches the total charges `payload_bytes + ROW_OVERHEAD_BYTES`.
+  about 1000× the budget on disk (the charge itself: `CLAUDE.md#Invariants an edit can silently break`).
   Evidence: commit `696d86d`, `src/webhooks_mcp/store.py#_evict_oldest`.
 
 ## Candidate rules (unverified)
