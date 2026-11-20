@@ -211,14 +211,15 @@ Reads never delete: an event can be read any number of times until it expires.
 
 **Hostnames (call — the owner said "same domain", the labels are proposals):**
 
-- MCP, public: `webhooks-mcp.<domain>` on 443.
+- MCP, public: `webhooks-mcp.public.<domain>` on 443.
 - Ingestion, tailnet-only: `webhooks.private.<domain>` on 443, for prod and staging alike.
 
-Amended 2026-11-20 (owner approved; contract C8): the ingest was `webhooks.ts.<domain>` on 443 (prod) and 8443
-(staging). homelab-edge now keeps `*.ts` for machines and serves tailnet-only services under `*.private`, and admits
-the staging VM on the ingest name alone, so one URL on 443 serves every environment; both ports reached the same
-listener and store. The listener never reads the Host header, so URLs minted under the former name keep working
-while the edge still serves it. The deployment steps below describe the original `*.ts` sites.
+Amended 2026-11-20 (owner approved; contract C8): the MCP was `webhooks-mcp.<domain>` and the ingest
+`webhooks.ts.<domain>` on 443 (prod) and 8443 (staging). homelab-edge now keeps `*.ts` for machines and serves
+internet services under `*.public` and tailnet-only ones under `*.private`. It admits the staging VM on the ingest
+name alone, so one URL on 443 serves every environment; both ports reached the same listener and store. Neither
+listener reads the Host header and the MCP key is not bound to a hostname, so the former names keep working while
+the edge still serves them. The deployment steps below describe the original sites.
 
 Changes:
 
