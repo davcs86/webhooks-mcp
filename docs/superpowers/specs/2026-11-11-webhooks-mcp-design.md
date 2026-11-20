@@ -192,7 +192,7 @@ Reads never delete: an event can be read any number of times until it expires.
 | Env var | Meaning |
 |---|---|
 | `MCP_AUTH_KEY` | The bearer key (secret) |
-| `INGEST_BASE_URLS` | JSON map of label → base URL used to build minted URLs **(call)**. On the edge: `{"default": "https://webhooks.ts.<domain>", "staging": "https://webhooks.ts.<domain>:8443"}`. Staging can only reach the edge on 8443, so one base is not enough; the agent passes the entry that matches the publisher |
+| `INGEST_BASE_URLS` | JSON map of label → base URL used to build minted URLs **(call)**. On the edge: `{"default": "https://webhooks.private.<domain>"}`. The map can hold several bases when publishers reach the edge on different addresses (staging once needed its own, on 8443); the agent passes the entry that matches the publisher |
 | `DATA_DIR` | Defaults to `/data` |
 
 ### 6.6 Build and release
@@ -211,8 +211,15 @@ Reads never delete: an event can be read any number of times until it expires.
 
 **Hostnames (call — the owner said "same domain", the labels are proposals):**
 
-- MCP, public: `webhooks-mcp.<domain>` on 443.
-- Ingestion, tailnet-only: `webhooks.ts.<domain>` on 443 (prod) and on 8443 (staging).
+- MCP, public: `webhooks-mcp.public.<domain>` on 443.
+- Ingestion, tailnet-only: `webhooks.private.<domain>` on 443, for prod and staging alike.
+
+Amended 2026-11-20 (owner approved; contract C8): the MCP was `webhooks-mcp.<domain>` and the ingest
+`webhooks.ts.<domain>` on 443 (prod) and 8443 (staging). homelab-edge now keeps `*.ts` for machines and serves
+internet services under `*.public` and tailnet-only ones under `*.private`. It admits the staging VM on the ingest
+name alone, so one URL on 443 serves every environment; both ports reached the same listener and store. Neither
+listener reads the Host header and the MCP key is not bound to a hostname, so the former names keep working while
+the edge still serves them. The deployment steps below describe the original sites.
 
 Changes:
 
@@ -334,11 +341,11 @@ Notify builds the envelope (`source_service`, `environment`, `occurred_at`) arou
 
 ### 8.4 The agent's flow, end to end
 
-1. Agent calls `mint_webhook_url("backfill")` on webhooks-mcp → `https://webhooks.ts.<domain>/hooks/minted.backfill-x7k2…`.
+1. Agent calls `mint_webhook_url("backfill")` on webhooks-mcp → `https://webhooks.private.<domain>/hooks/minted.backfill-x7k2…`.
 2. Agent calls xstockstrat `trigger_backfill(..., callback_url=<that URL>)` → `job_id`.
 3. Later, agent calls `wait_for_event("minted.backfill-x7k2…")` and gets the terminal event.
 
-Or, without minting: pass `https://webhooks.ts.<domain>/hooks` and query
+Or, without minting: pass `https://webhooks.private.<domain>/hooks` and query
 `list_events("ingest.backfill.completed")`, matching on `payload.data.job_id`.
 
 ## 9. Order of work
