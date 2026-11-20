@@ -14,7 +14,7 @@ land the matching change in every consumer named in the last column. Never chang
 | C5 | Client address | Ingest reads the first address of `X-Forwarded-For` as `source_ip` | homelab-edge → webhooks-mcp |
 | C6 | Body cap | 256 KiB at the listener; Caddy's cap on the ingest host equals it | webhooks-mcp ↔ homelab-edge |
 | C7 | Image | `ghcr.io/davcs86/webhooks-mcp@sha256:<digest>`, public | webhooks-mcp → homelab-edge |
-| C8 | Hostnames | MCP `webhooks-mcp.<domain>`; ingest `webhooks.private.<domain>` on 443 and 8443. The former ingest name `webhooks.ts.<domain>` stays served on both ports until the last URL minted under it has expired, then is removed | homelab-edge → xstockstrat, owner |
+| C8 | Hostnames | MCP `webhooks-mcp.<domain>`; ingest `webhooks.private.<domain>` on 443, one URL for every environment. The former ingest name `webhooks.ts.<domain>` stays served on 443 and 8443 until the last URL minted under it has expired, then is removed with the 8443 listener | homelab-edge → xstockstrat, owner |
 | C9 | Wire format | spec 8.3: JSON envelope plus `Idempotency-Key` header | xstockstrat → webhooks-mcp |
 
 Also part of the contract, enforced in code: the MCP tool names and argument names (`list_events`, `get_event`,

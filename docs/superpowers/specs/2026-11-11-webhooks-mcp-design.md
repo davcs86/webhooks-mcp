@@ -192,7 +192,7 @@ Reads never delete: an event can be read any number of times until it expires.
 | Env var | Meaning |
 |---|---|
 | `MCP_AUTH_KEY` | The bearer key (secret) |
-| `INGEST_BASE_URLS` | JSON map of label → base URL used to build minted URLs **(call)**. On the edge: `{"default": "https://webhooks.private.<domain>", "staging": "https://webhooks.private.<domain>:8443"}`. Staging can only reach the edge on 8443, so one base is not enough; the agent passes the entry that matches the publisher |
+| `INGEST_BASE_URLS` | JSON map of label → base URL used to build minted URLs **(call)**. On the edge: `{"default": "https://webhooks.private.<domain>"}`. The map can hold several bases when publishers reach the edge on different addresses (staging once needed its own, on 8443); the agent passes the entry that matches the publisher |
 | `DATA_DIR` | Defaults to `/data` |
 
 ### 6.6 Build and release
@@ -212,12 +212,13 @@ Reads never delete: an event can be read any number of times until it expires.
 **Hostnames (call — the owner said "same domain", the labels are proposals):**
 
 - MCP, public: `webhooks-mcp.<domain>` on 443.
-- Ingestion, tailnet-only: `webhooks.private.<domain>` on 443 (prod) and on 8443 (staging).
+- Ingestion, tailnet-only: `webhooks.private.<domain>` on 443, for prod and staging alike.
 
-Amended 2026-11-20 (owner approved; contract C8): the ingest name was `webhooks.ts.<domain>`. homelab-edge now keeps
-`*.ts` for machines and serves tailnet-only services under `*.private`. The listener never reads the Host header, so
-URLs minted under the former name keep working while the edge still serves it. The deployment steps below describe
-the original `*.ts` sites; the `*.private` sites mirror them.
+Amended 2026-11-20 (owner approved; contract C8): the ingest was `webhooks.ts.<domain>` on 443 (prod) and 8443
+(staging). homelab-edge now keeps `*.ts` for machines and serves tailnet-only services under `*.private`, and admits
+the staging VM on the ingest name alone, so one URL on 443 serves every environment; both ports reached the same
+listener and store. The listener never reads the Host header, so URLs minted under the former name keep working
+while the edge still serves it. The deployment steps below describe the original `*.ts` sites.
 
 Changes:
 
