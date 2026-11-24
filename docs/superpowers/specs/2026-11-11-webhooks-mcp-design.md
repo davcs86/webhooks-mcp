@@ -269,12 +269,12 @@ unreachable issuer (no 503), and knows nothing of the static key. In order:
      (constant, 60 **(call)**) by the injected clock. PyJWT's own `verify_exp`, `verify_nbf` and `verify_iat` are
      turned off: PyJWT reads wall time.
 
-   The `AccessToken` carries `scopes` from `scp` when it is a list of strings, else from the space-delimited `scope`
-   string, else none (Authelia v4.39.28 sends `scp` as an array, xstockstrat 345 spike (b)); `expires_at` from `exp`,
+   The `AccessToken` carries `scopes` from `scp` when present (anything but a list of strings gives no scopes), else
+   from the space-delimited `scope` string, else none (Authelia v4.39.28 sends `scp` as an array, xstockstrat 345 spike (b)); `expires_at` from `exp`,
    `resource` `OAUTH_RESOURCE`, `subject` from `sub` and `client_id` from the `client_id` claim (RFC 9068), each empty
    when absent; only `scopes` is read **(call)**.
-4. Those `scopes` must contain `REQUIRED_SCOPE` (constant, `webhooks-mcp`) → else 403 `insufficient_scope`; an `scp`
-   that is not a list of strings counts as no scopes.
+4. Those `scopes` must contain `REQUIRED_SCOPE` (constant, `webhooks-mcp`) → else 403 `insufficient_scope`; a malformed
+   `scp` is never rescued by a `scope` claim.
    This is the whole authorization, for a person's token and a `client_credentials` token alike: the latter's `sub`,
    whatever the issuer puts there, does not matter.
 
