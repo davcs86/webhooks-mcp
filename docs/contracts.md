@@ -7,10 +7,10 @@ land the matching change in every consumer named in the last column. Never chang
 
 | # | Contract | Value | Producer → consumers |
 |---|---|---|---|
-| C1 | MCP listener | container port `9100`, `POST /mcp`, `GET /healthz`; `Authorization: Bearer <key>`; 401 without it | webhooks-mcp → homelab-edge |
+| C1 | MCP listener | container port `9100`, `POST /mcp`, `GET /healthz`; `Authorization: Bearer <key>`; 401 without it. Amended 2026-11-24 (spec 6.7, not built; the values before this sentence hold while `AUTH_MODE=static`, the default): `AUTH_MODE` `static` / `static+oauth` / `oauth`; in the OAuth modes also an RS256 JWT access token from `OAUTH_ISSUER` with `aud` `OAUTH_RESOURCE`, `GET /.well-known/oauth-protected-resource/mcp`, 401 with `WWW-Authenticate: Bearer resource_metadata="…"`, 403 for a missing `webhooks-mcp` scope or an `(iss, sub)` outside the allowlist, 503 while the issuer's keys cannot be fetched; 401 without credentials in every mode | webhooks-mcp → homelab-edge, the owner's MCP clients |
 | C2 | Ingest listener | container port `9101`, `POST /hooks`, `POST /hooks/{name}`, `GET /healthz` | webhooks-mcp → homelab-edge, xstockstrat |
 | C3 | Ingest responses | 201 `{event_id, duplicate:false}`, 200 `{…duplicate:true}`, 404, 413, 422, and 503 when over the concurrency limit — retry (spec 6.2) | webhooks-mcp → xstockstrat |
-| C4 | Container env | `MCP_AUTH_KEY`, `INGEST_BASE_URLS` (JSON map), `DATA_DIR=/data` | webhooks-mcp → homelab-edge |
+| C4 | Container env | `MCP_AUTH_KEY`, `INGEST_BASE_URLS` (JSON map), `DATA_DIR=/data`. Amended 2026-11-24 (spec 6.5, 6.7, not built): `AUTH_MODE`, `OAUTH_ISSUER`, `OAUTH_RESOURCE`, `OAUTH_ALLOWED_SUBJECTS` (JSON array of `{iss, sub}`); `MCP_AUTH_KEY` only in `static` and `static+oauth` | webhooks-mcp → homelab-edge |
 | C5 | Client address | Ingest reads the first address of `X-Forwarded-For` as `source_ip` | homelab-edge → webhooks-mcp |
 | C6 | Body cap | 256 KiB at the listener; Caddy's cap on the ingest host equals it | webhooks-mcp ↔ homelab-edge |
 | C7 | Image | `ghcr.io/davcs86/webhooks-mcp@sha256:<digest>`, public | webhooks-mcp → homelab-edge |
