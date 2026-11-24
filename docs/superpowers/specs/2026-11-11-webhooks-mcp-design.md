@@ -5,7 +5,9 @@ rationale for the listener's behaviour; the frozen contract values live in `docs
 
 Amended 2026-11-24 for single sign-on (6.7): **specified, not built.** The source of truth for the shared design is
 `davcs86/homelab-edge` `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md` (decisions 4, 5, 16; § 4.6; § 5;
-phase P4). Until an image with 6.7 ships and the edge sets `AUTH_MODE`, the service behaves exactly as below.
+phase P4). Decision 16 changed on 2026-11-24 (owner): the service authorizes by issuer, audience and the `webhooks-mcp`
+scope only, with no `(iss, sub)` allowlist; 6.7 follows the change ahead of the SSO spec. Until an image with 6.7 ships
+and the edge sets `AUTH_MODE`, the service behaves exactly as below.
 
 Spans three repositories: `davcs86/webhooks-mcp` (the service), `davcs86/homelab-edge` (its deployment
 on the edge droplet), `davcs86/xstockstrat` (the first publisher).
@@ -34,8 +36,8 @@ tools. It is deliberately generic — xstockstrat is the first publisher, not th
 
 - ~~OAuth / OIDC on the MCP side.~~ Amended 2026-11-24: the MCP side becomes an OAuth 2.1 resource server (6.7);
   the service still never issues tokens, hosts a login or registers clients.
-- Multiple users or tenant isolation. Single owner: the `(iss, sub)` allowlist of 6.7 names the owner's own identities
-  and clients, and every allowed caller sees the whole store.
+- Multiple users or tenant isolation. Single owner: every caller holding a valid token with the `webhooks-mcp` scope
+  (6.7) sees the whole store.
 - Publishers outside the tailnet. Ingestion is tailnet-only, so the DigitalOcean-hosted xstockstrat apps
   and outside SaaS cannot publish, and a minted URL only works for a tailnet caller.
 - Authentication or signing on ingestion. Tailnet reachability is the control.
@@ -47,7 +49,7 @@ tools. It is deliberately generic — xstockstrat is the first publisher, not th
 
 - The ingestion port is reachable from the public internet.
 - The MCP bearer key or an access token appears in a log, a commit, or the repo.
-- A token from another issuer, for another audience, or for a subject outside the allowlist reads an event (6.7).
+- A token from another issuer, for another audience, or without the `webhooks-mcp` scope reads an event (6.7).
 - A webhook payload is presented to an agent as anything other than untrusted data.
 - A lost or duplicated webhook delivery goes unnoticed (no retry, no dedup, no dead-letter signal).
 
@@ -96,7 +98,7 @@ How events reach notify, within B:
    Claude.ai sends it through the connector's "Request headers" option, which is in beta; the owner
    accepted that dependency. Amended 2026-11-24 (owner, homelab-edge SSO spec decisions 5 and 16): `AUTH_MODE`
    `static` (this decision, the default) | `static+oauth` (transition) | `oauth`; in the OAuth modes the service
-   accepts JWT access tokens from one external issuer and authorizes an `(iss, sub)` allowlist plus a scope (6.7).
+   accepts JWT access tokens from one external issuer and authorizes by issuer, audience and scope only (6.7).
 2. `event_name` is primarily a shared event type; minted URLs get their own unique name.
 3. Ingestion: no authentication, behind Caddy, tailnet-only.
 4. Pull-only for agents.
@@ -203,9 +205,8 @@ Reads never delete: an event can be read any number of times until it expires.
 |---|---|
 | `MCP_AUTH_KEY` | The bearer key (secret). Required in `static` and `static+oauth`; refused at start in `oauth` (6.7) |
 | `AUTH_MODE` | `static` (default) \| `static+oauth` \| `oauth` (6.7); any other value is refused at start |
-| `OAUTH_ISSUER` | Required in the OAuth modes, refused otherwise: the token issuer, compared to `iss` as an exact string |
-| `OAUTH_RESOURCE` | Required in the OAuth modes, refused otherwise: this server's resource URL, the expected `aud` and the protected resource metadata's `resource`. On the edge: `https://webhooks-mcp.public.<domain>/mcp` |
-| `OAUTH_ALLOWED_SUBJECTS` | Required in the OAuth modes, refused otherwise: a non-empty JSON array of `{"iss": "...", "sub": "..."}`; every `iss` must equal `OAUTH_ISSUER` **(call)** |
+| `OAUTH_ISSUER` | Required in the OAuth modes, refused otherwise: the token issuer, compared to `iss` as an exact string; `https:`, no trailing slash, query or fragment. On the edge: `https://auth.public.<domain>` |
+| `OAUTH_RESOURCE` | Required in the OAuth modes, refused otherwise: this server's resource URL, the expected `aud` and the protected resource metadata's `resource`; `https:`, path exactly `/mcp`, no query or fragment. On the edge: `https://webhooks-mcp.public.<domain>/mcp` |
 | `INGEST_BASE_URLS` | JSON map of label → base URL used to build minted URLs **(call)**. On the edge: `{"default": "https://webhooks.private.<domain>"}`. The map can hold several bases when publishers reach the edge on different addresses (staging once needed its own, on 8443); the agent passes the entry that matches the publisher |
 | `DATA_DIR` | Defaults to `/data` |
 
@@ -229,81 +230,125 @@ Reads never delete: an event can be read any number of times until it expires.
 | `static+oauth` | the static key, or an access token as below | served |
 | `oauth` | an access token only | served |
 
-The default keeps today's behaviour, so a new image changes nothing until the edge sets `AUTH_MODE` (homelab-edge
-expand-and-contract rule). The service is a resource server only: it never issues tokens, hosts a login or registers
-clients, and nothing in it depends on Authelia; any issuer that signs RS256 JWT access tokens works.
+The default keeps today's behaviour, so a new image changes nothing until the edge sets `AUTH_MODE` (homelab-edge SSO
+spec § 3 "Upgrade safety"). Because `static` refuses any `OAUTH_*` variable at start (below), the edge sets `AUTH_MODE`
+and the `OAUTH_*` variables in one change and removes them in one change. The service is a resource server only: it
+never issues tokens, hosts a login or registers clients, and nothing in it depends on Authelia; any issuer that signs
+RS256 JWT access tokens works.
+
+**Who may call** (owner, 2026-11-24): the service authorizes by issuer, audience and the `webhooks-mcp` scope only, and
+keeps no list of subjects. Who can get such a token is decided at the issuer: on the edge, membership of Authelia's
+`webhooks-mcp` group for the user clients `webhooks-mcp-claude` and `webhooks-mcp-claude-code`, and holding the secret
+of the `client_credentials` client `webhooks-mcp-automation` (SSO spec § 4.6). Accepted residuals: an issuer client
+misconfigured to hold that scope and audience is not caught here; and a person removed from the group keeps an issued
+access token until its `exp` (1 h on the edge), and keeps refreshing for as long as the issuer allows (SSO spec S4, S24).
 
 **Request check.** `McpEndpoint` stays the one place a request is accepted or refused **(call)**. It does not use the
 SDK's `BearerAuthBackend`/`RequireAuthMiddleware`: that backend matches the scheme case-insensitively (WM-08 requires the
-exact `b"Bearer "` compare), reads wall time for `exp` (tests inject the clock), and has no 403 for an allowlist. In
-order:
+exact `b"Bearer "` compare), reads wall time for `exp` (tests inject the clock), cannot tell a refused token from an
+unreachable issuer (no 503), and knows nothing of the static key. In order:
 
-1. In `static` and `static+oauth`, an exact constant-time compare against `b"Bearer " + MCP_AUTH_KEY` (WM-08); a match
+1. In the OAuth modes, a request with more than one `Authorization` header → 401 **(call)**. (`static` keeps today's
+   `dict(scope["headers"])`, which takes the last one.)
+2. In `static` and `static+oauth`, an exact constant-time compare against `b"Bearer " + MCP_AUTH_KEY` (WM-08); a match
    is accepted with no token parsing.
-2. In the OAuth modes, a header that is not exactly `Bearer <token>` → 401. Otherwise the token goes to a
-   `JwksTokenVerifier` implementing the SDK's `TokenVerifier` protocol (`verify_token(token) -> AccessToken | None`). It
-   accepts only: header `alg` `RS256` (anything else, `none` included, refused); a `kid` found in the issuer's JWKS; a
-   valid signature; `iss` equal to `OAUTH_ISSUER`; `aud` equal to, or a list containing, `OAUTH_RESOURCE`; `exp` in the
-   future and `nbf`/`iat` not in the future, both within `TOKEN_CLOCK_SKEW_SECONDS` (constant, 60 **(call)**) by the
-   injected clock. Header `typ` `at+jwt` (RFC 9068) is required if spike S2 shows Authelia v4.39.28 sets it, and
-   dropped from the check if not. A refused token → 401 `invalid_token`.
-3. `scope` (space-delimited) must contain `REQUIRED_SCOPE` (constant, `webhooks-mcp`) → else 403 `insufficient_scope`.
-4. `(iss, sub)` must be an entry of `OAUTH_ALLOWED_SUBJECTS` → else 403 `forbidden`. For a `client_credentials` token
-   the `sub` is the client's (S2 records the exact value); it is allowlisted like a person's.
+3. In the OAuth modes, the header value must be `Bearer ` (exact, WM-08) followed by a non-empty token with no
+   whitespace, else 401. The token goes to a `JwksTokenVerifier` implementing the SDK's `TokenVerifier` protocol
+   (`verify_token(token) -> AccessToken | None`). `None` always means a refused token → 401 `invalid_token`; when the
+   token needs a key the verifier cannot get (Keys, below) it raises `IssuerUnavailable`, which `McpEndpoint` maps to
+   503 **(call)**. It accepts only:
+   - header `alg` `RS256` (anything else, `none` included, refused);
+   - header `typ` absent, `at+jwt` or `application/at+jwt` (the two spellings RFC 9068 § 4 names); any other value
+     refused **(call)**. Absent is accepted because whether Authelia v4.39.28 sets it is not recorded;
+   - a `kid` found in the issuer's JWKS, and a valid signature;
+   - claims `exp`, `iss` and `aud` present (PyJWT `options={"require": ["exp", "iss", "aud"]}`), so a token without
+     `exp` never lives forever; `sub` is not required, since nothing authorizes on it **(call)**;
+   - `iss` equal to `OAUTH_ISSUER`; `aud` equal to, or a list containing, `OAUTH_RESOURCE`;
+   - `exp` in the future and `nbf`/`iat`, when present, not in the future, each within `TOKEN_CLOCK_SKEW_SECONDS`
+     (constant, 60 **(call)**) by the injected clock. PyJWT's own `verify_exp`, `verify_nbf` and `verify_iat` are
+     turned off: PyJWT reads wall time.
+
+   The `AccessToken` carries `scopes` from `scope`, `expires_at` from `exp`, `resource` `OAUTH_RESOURCE`, `subject`
+   from `sub` and `client_id` from the `client_id` claim (RFC 9068), each empty when absent; only `scopes` is read
+   **(call)**.
+4. `scope` (space-delimited) must contain `REQUIRED_SCOPE` (constant, `webhooks-mcp`) → else 403 `insufficient_scope`.
+   This is the whole authorization, for a person's token and a `client_credentials` token alike: the latter's `sub`,
+   whatever the issuer puts there, does not matter.
 
 `AuthSettings(issuer_url=OAUTH_ISSUER, resource_server_url=OAUTH_RESOURCE, required_scopes=[REQUIRED_SCOPE],
-validate_token_resource=False)` validates the configuration (the verifier checks `aud` itself; setting the flag
-explicitly keeps the SDK's deprecation warning out of `pytest -W error`).
+validate_token_resource=False)` is built standalone at start to validate the configuration and is not passed to
+`MCPServer`, which would then require a `token_verifier` and wire the SDK's middleware **(call)**. The verifier checks
+`aud` itself; setting the flag explicitly keeps the SDK's `MCPDeprecationWarning` out of `pytest -W error`.
 
 **Responses** (WM-05: fixed reasons, never echoing input):
 
 | Case | Status | `WWW-Authenticate` |
 |---|---|---|
-| No credentials, malformed header, wrong static key, refused token | 401 `{"error": "unauthorized"}` | `Bearer` in `static`; in the OAuth modes `Bearer resource_metadata="<metadata URL>"`, plus `error="invalid_token"` for a presented, refused token |
+| No credentials, malformed header, more than one `Authorization` header (OAuth modes), wrong static key, refused token | 401 `{"error": "unauthorized"}` | `Bearer` in `static`; in the OAuth modes `Bearer resource_metadata="<metadata URL>"`, plus `error="invalid_token"` for a presented, refused token |
 | Valid token without the scope | 403 `{"error": "insufficient_scope"}` | `Bearer error="insufficient_scope", scope="webhooks-mcp", resource_metadata="<metadata URL>"` |
-| Valid token, `(iss, sub)` not allowlisted | 403 `{"error": "forbidden"}` | — |
-| A token that needs a key while the JWKS cannot be fetched and none is cached | 503 `{"error": "issuer unavailable"}` **(call)** | — |
+| A token that needs a key while the JWKS cannot be fetched and none is cached (`IssuerUnavailable`) | 503 `{"error": "issuer unavailable"}` **(call)** | — |
 
-The homelab-edge Gatus probe ("POST `/mcp` without a key → 401") holds in every mode. A 503 rather than a 401 keeps a
-client from discarding a good token while the issuer is down **(call)**.
+`<metadata URL>` is `build_resource_metadata_url(OAUTH_RESOURCE)`, computed once at start (on the edge
+`https://webhooks-mcp.public.<domain>/.well-known/oauth-protected-resource/mcp`), never from the request's `Host`. The
+homelab-edge Gatus probe ("POST `/mcp` without a key → 401") holds in every mode. A 503 rather than a 401 keeps a client
+from discarding a good token while the issuer is down **(call)**.
 
 **Protected resource metadata** (RFC 9728), on the MCP port only, in the OAuth modes: `GET
 /.well-known/oauth-protected-resource/mcp`, built with the SDK's `create_protected_resource_routes(resource_url=
-OAUTH_RESOURCE, authorization_servers=[OAUTH_ISSUER], scopes_supported=[REQUIRED_SCOPE])`. Unauthenticated; homelab-edge
-proxies that path on the public MCP site (`bearer_mcp`).
+OAUTH_RESOURCE, authorization_servers=[OAUTH_ISSUER], scopes_supported=[REQUIRED_SCOPE])`, with both URLs passed as the
+configured strings: a bare `AnyHttpUrl("https://auth.public.<domain>")` serialises with a trailing `/` and breaks
+clients' exact issuer match. Unauthenticated; homelab-edge proxies that path on the public MCP site (`bearer_mcp`).
 
-**Keys.** The verifier reads `jwks_uri` from `<OAUTH_ISSUER>/.well-known/openid-configuration` and refuses metadata
-whose `issuer` differs from `OAUTH_ISSUER` **(call)**. It fetches lazily on the first token, caches keys for
-`JWKS_MAX_AGE_SECONDS` (constant, 3600: one access-token lifetime, matching the edge's JWKS rotation runbook), and
-refetches on an unknown `kid` at most once per `JWKS_REFETCH_MIN_SECONDS` (constant, 60), so a stream of junk tokens
-cannot flood the issuer's back-channel zone. A failed fetch keeps the cached keys. Startup never needs the issuer, so
-`static+oauth` keeps serving the static key while it is down. The HTTP client is one the SDK already depends on, and
-`pyjwt[crypto]` (already in `uv.lock` through `mcp`) becomes a direct dependency: no new package. On the edge the
-container reaches the issuer by its public name through `extra_hosts: ["auth.public.<domain>:host-gateway"]` (homelab-edge
-SSO spec § 4.2, S18).
+**Keys.** The verifier reads `jwks_uri` from `<OAUTH_ISSUER>/.well-known/openid-configuration`; a discovery document
+whose `issuer` differs from `OAUTH_ISSUER`, or whose `jwks_uri` is not `https:` on the issuer's origin, is a failed
+fetch **(call)**. The discovery document and the keys are fetched together, lazily by the first token that needs a key,
+and cached together for `JWKS_MAX_AGE_SECONDS` (constant, 3600: one access-token lifetime, matching the edge's JWKS
+rotation, SSO spec § 4.7 "Rotation runbook"); the first token that needs a key after that refreshes them, as does an
+unknown `kid`. Every fetch attempt (the first, the refresh after expiry, the one on an unknown `kid`, a retry after a
+failure) shares one limit, at most one per `JWKS_REFETCH_MIN_SECONDS` (constant, 60) by the injected clock, so a stream
+of junk tokens on the public MCP name cannot flood the issuer's back-channel zone. Concurrent requests wait on the one
+fetch in flight. Each request gets `JWKS_FETCH_TIMEOUT_SECONDS` (constant, 5 **(call)**) and each response at most
+`JWKS_MAX_RESPONSE_BYTES` (constant, 65536 **(call)**; WM-03); a timeout, a non-200, an oversized or an unparsable
+response is a failed fetch. A failed fetch keeps the cached keys. A token whose key is not cached, when no fetch is
+allowed or the fetch fails: → 401 if any key is cached, `IssuerUnavailable` (503) if none is. Startup never needs the
+issuer, so `static+oauth` keeps serving the static key while it is down.
+
+The HTTP client is `httpx2`'s `AsyncClient` (2.16.0 in `uv.lock`, which `mcp` already depends on). The change that
+builds 6.7 adds `httpx2` and `pyjwt[crypto]` (2.15.1 in `uv.lock`, through `mcp`) to `[project].dependencies` and runs
+`uv lock` in the same PR: no new package. `httpx` is in the `dev` extra only and absent from the runtime image. PyJWT's
+`PyJWKClient` is not used: it fetches with synchronous `urllib` and caches on its own `time.monotonic()`, outside the
+injected clock and the limits above. On the edge the container reaches the issuer by its public name through
+`extra_hosts: ["auth.public.<domain>:host-gateway"]` (homelab-edge SSO spec § 4.2, S18).
 
 **Configuration refusals at start** (exit 2, as today): an unknown `AUTH_MODE`; `MCP_AUTH_KEY` missing or short in
 `static`/`static+oauth`, or set in `oauth` (a forgotten key must not linger) **(call)**; any `OAUTH_*` variable set in
-`static`, or missing in an OAuth mode; `OAUTH_ISSUER`/`OAUTH_RESOURCE` not an `https:` URL; `OAUTH_ALLOWED_SUBJECTS`
-not a non-empty array of `{iss, sub}` string pairs, or an entry whose `iss` is not `OAUTH_ISSUER`.
+`static` **(call)**, or missing in an OAuth mode; `OAUTH_ISSUER` not an `https:` URL, or with a trailing slash, a query
+or a fragment (a path is allowed) **(call)**; `OAUTH_RESOURCE` not an `https:` URL whose path is exactly `/mcp`, with no
+query or fragment. Both would otherwise start cleanly and fail every token: the `iss` compare is exact, and the metadata
+route and the `aud` compare derive from `OAUTH_RESOURCE`, which the edge proxies only on `/mcp`.
 
-**Logs.** One line per refused request with the mode and an enumerated reason (`missing`, `invalid`, `scope`,
-`subject`, `issuer_unavailable`). Never the key, a token, a claim value or a `sub` (Rule 5) **(call)**.
+**Logs.** In the OAuth modes, one line per refused request with the mode and an enumerated reason (`missing`,
+`invalid`, `scope`, `issuer_unavailable`); `static` logs nothing new **(call)**. Never the key, a token, a claim value or
+a `sub` (Rule 5) **(call)**.
 
 **Transition** (P4): the edge sets `static+oauth` → every consumer that sends `MCP_AUTH_KEY` today moves to its OAuth
 client (the Claude.ai connector to `webhooks-mcp-claude`, Claude Code to `webhooks-mcp-claude-code`, any headless caller
-to the `client_credentials` client `webhooks-mcp-automation`, whose secret's home homelab-edge `sso.md` names) → the edge
-sets `oauth` and stops passing `MCP_AUTH_KEY`. The SOPS key is retired only after P4 passes, so going back to
-`static+oauth` stays a one-line rollback until then.
+to `webhooks-mcp-automation`, whose secret's home homelab-edge `sso.md` is to name, SSO spec § 5; P4 does not start
+until it does) → the edge sets `oauth` and stops passing `MCP_AUTH_KEY`. The SOPS key is retired only after P4 passes,
+so until then going back to `static+oauth` is a revert of that one edge change (the mode and the key together). Once
+the key is retired, no image older than 6.7 can be redeployed: it refuses to start without `MCP_AUTH_KEY`.
 
 **Tests** (written first, `pytest -W error`, no network): a stub issuer inside the test process (a generated RSA key,
 its JWKS and discovery document served through an injected fetcher). Cases: every row of the mode table; each refusal
-in step 2 (wrong `iss`, wrong or missing `aud`, expired and not-yet-valid by `FakeClock`, `alg` `none` and `HS256`,
-unknown `kid`, bad signature); one refetch on an unknown `kid` and none within `JWKS_REFETCH_MIN_SECONDS`; 403 for the
-scope and for a subject outside the allowlist; 503 with the issuer down and no cached key, and the static key still
-accepted in `static+oauth` meanwhile; `bearer <key>` (lower case) still 401 in every mode (WM-08); the metadata route's
-body and its 404 in `static`; the `WWW-Authenticate` values of the table; every configuration refusal above; no token
-or key in captured logs.
+in step 3 (wrong `iss`, wrong or missing `aud`, missing `exp`, expired and not-yet-valid by `FakeClock`, `alg` `none`
+and `HS256`, another `typ`, unknown `kid`, bad signature), and an `aud` list containing the resource accepted; two
+`Authorization` headers → 401 in the OAuth modes; one refetch on an unknown `kid` and none within
+`JWKS_REFETCH_MIN_SECONDS`, after a success or a failure; concurrent requests sharing one fetch; a discovery document
+with another `issuer`, and a fetch timeout, each a failed fetch; 403 without the scope, and a token with the scope but
+no `sub` accepted; 503 with the issuer down and no cached key, and the static key still accepted in `static+oauth`
+meanwhile; `bearer <key>` (lower case) still 401 in every mode (WM-08); the metadata route's body (issuer without a
+trailing `/`) and its 404 in `static`; the `WWW-Authenticate` values of the table; every configuration refusal above;
+no token or key in captured logs.
 
 ## 7. Deployment (`davcs86/homelab-edge`)
 
