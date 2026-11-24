@@ -6,7 +6,7 @@ rationale for the listener's behaviour; the frozen contract values live in `docs
 Amended 2026-11-24 for single sign-on (6.7): **specified, not built.** The source of truth for the shared design is
 `davcs86/homelab-edge` `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md` (decisions 4, 5, 16; § 4.6; § 5;
 phase P4). Decision 16 changed on 2026-11-24 (owner): the service authorizes by issuer, audience and the `webhooks-mcp`
-scope only, with no `(iss, sub)` allowlist; 6.7 follows the change ahead of the SSO spec. Until an image with 6.7 ships
+scope only, with no `(iss, sub)` allowlist (SSO spec decision 16 as amended). Until an image with 6.7 ships
 and the edge sets `AUTH_MODE`, the service behaves exactly as below.
 
 Spans three repositories: `davcs86/webhooks-mcp` (the service), `davcs86/homelab-edge` (its deployment
@@ -241,7 +241,8 @@ keeps no list of subjects. Who can get such a token is decided at the issuer: on
 `webhooks-mcp` group for the user clients `webhooks-mcp-claude` and `webhooks-mcp-claude-code`, and holding the secret
 of the `client_credentials` client `webhooks-mcp-automation` (SSO spec § 4.6). Accepted residuals: an issuer client
 misconfigured to hold that scope and audience is not caught here; and a person removed from the group keeps an issued
-access token until its `exp` (1 h on the edge), and keeps refreshing for as long as the issuer allows (SSO spec S4, S24).
+access token until its `exp` (1 h on the edge), and keeps refreshing for as long as the issuer allows: Authelia v4.39.28
+kept refreshing after removal from the group (xstockstrat 345 spike (d), `context.md`; SSO spec S4, S24).
 
 **Request check.** `McpEndpoint` stays the one place a request is accepted or refused **(call)**. It does not use the
 SDK's `BearerAuthBackend`/`RequireAuthMiddleware`: that backend matches the scheme case-insensitively (WM-08 requires the
@@ -258,8 +259,8 @@ unreachable issuer (no 503), and knows nothing of the static key. In order:
    token needs a key the verifier cannot get (Keys, below) it raises `IssuerUnavailable`, which `McpEndpoint` maps to
    503 **(call)**. It accepts only:
    - header `alg` `RS256` (anything else, `none` included, refused);
-   - header `typ` absent, `at+jwt` or `application/at+jwt` (the two spellings RFC 9068 § 4 names); any other value
-     refused **(call)**. Absent is accepted because whether Authelia v4.39.28 sets it is not recorded;
+   - header `typ` `at+jwt` or `application/at+jwt`, compared case-insensitively (the two spellings RFC 9068 § 4
+     names); absent or any other value refused. Authelia v4.39.28 sets `at+jwt` (xstockstrat 345 spike (b));
    - a `kid` found in the issuer's JWKS, and a valid signature;
    - claims `exp`, `iss` and `aud` present (PyJWT `options={"require": ["exp", "iss", "aud"]}`), so a token without
      `exp` never lives forever; `sub` is not required, since nothing authorizes on it **(call)**;
@@ -268,10 +269,12 @@ unreachable issuer (no 503), and knows nothing of the static key. In order:
      (constant, 60 **(call)**) by the injected clock. PyJWT's own `verify_exp`, `verify_nbf` and `verify_iat` are
      turned off: PyJWT reads wall time.
 
-   The `AccessToken` carries `scopes` from `scope`, `expires_at` from `exp`, `resource` `OAUTH_RESOURCE`, `subject`
-   from `sub` and `client_id` from the `client_id` claim (RFC 9068), each empty when absent; only `scopes` is read
-   **(call)**.
-4. `scope` (space-delimited) must contain `REQUIRED_SCOPE` (constant, `webhooks-mcp`) → else 403 `insufficient_scope`.
+   The `AccessToken` carries `scopes` from `scp` when it is a list of strings, else from the space-delimited `scope`
+   string, else none (Authelia v4.39.28 sends `scp` as an array, xstockstrat 345 spike (b)); `expires_at` from `exp`,
+   `resource` `OAUTH_RESOURCE`, `subject` from `sub` and `client_id` from the `client_id` claim (RFC 9068), each empty
+   when absent; only `scopes` is read **(call)**.
+4. Those `scopes` must contain `REQUIRED_SCOPE` (constant, `webhooks-mcp`) → else 403 `insufficient_scope`; an `scp`
+   that is not a list of strings counts as no scopes.
    This is the whole authorization, for a person's token and a `client_credentials` token alike: the latter's `sub`,
    whatever the issuer puts there, does not matter.
 
@@ -333,15 +336,18 @@ a `sub` (Rule 5) **(call)**.
 
 **Transition** (P4): the edge sets `static+oauth` → every consumer that sends `MCP_AUTH_KEY` today moves to its OAuth
 client (the Claude.ai connector to `webhooks-mcp-claude`, Claude Code to `webhooks-mcp-claude-code`, any headless caller
-to `webhooks-mcp-automation`, whose secret's home homelab-edge `sso.md` is to name, SSO spec § 5; P4 does not start
-until it does) → the edge sets `oauth` and stops passing `MCP_AUTH_KEY`. The SOPS key is retired only after P4 passes,
-so until then going back to `static+oauth` is a revert of that one edge change (the mode and the key together). Once
-the key is retired, no image older than 6.7 can be redeployed: it refuses to start without `MCP_AUTH_KEY`.
+to `webhooks-mcp-automation`, whose secret lives in the edge's SOPS, homelab-edge `sso.md` § 6b; P4 does not start until
+that consumer is named, SSO spec § 12) → the edge sets `oauth` and stops passing `MCP_AUTH_KEY`. The SOPS key is retired
+only after P4 passes, so until then going back to `static+oauth` is a revert of that one edge change (the mode and the
+key together). Once the key is retired, no image older than 6.7 can be redeployed: it refuses to start without
+`MCP_AUTH_KEY`.
 
 **Tests** (written first, `pytest -W error`, no network): a stub issuer inside the test process (a generated RSA key,
 its JWKS and discovery document served through an injected fetcher). Cases: every row of the mode table; each refusal
 in step 3 (wrong `iss`, wrong or missing `aud`, missing `exp`, expired and not-yet-valid by `FakeClock`, `alg` `none`
-and `HS256`, another `typ`, unknown `kid`, bad signature), and an `aud` list containing the resource accepted; two
+and `HS256`, another `typ` and `typ` absent (the stub issuer sets `typ` explicitly: PyJWT defaults to `JWT`), unknown
+`kid`, bad signature), scopes as an `scp` array and as a `scope` string accepted, neither and an `scp` of the wrong type
+→ 403, and an `aud` list containing the resource accepted; two
 `Authorization` headers → 401 in the OAuth modes; one refetch on an unknown `kid` and none within
 `JWKS_REFETCH_MIN_SECONDS`, after a success or a failure; concurrent requests sharing one fetch; a discovery document
 with another `issuer`, and a fetch timeout, each a failed fetch; 403 without the scope, and a token with the scope but
