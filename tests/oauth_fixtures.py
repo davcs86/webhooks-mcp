@@ -9,7 +9,10 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
+from mcp_fixtures import KEY, serve
+from webhooks_mcp.config import Settings
 from webhooks_mcp.jwks import JwksCache
+from webhooks_mcp.mcp_app import build_mcp_app
 from webhooks_mcp.token_verifier import JwksTokenVerifier
 
 ISSUER = "https://auth.example"
@@ -103,3 +106,18 @@ async def jwks_cache(issuer, clock):
 @pytest.fixture
 def verifier(jwks_cache, clock) -> JwksTokenVerifier:
     return JwksTokenVerifier(ISSUER, RESOURCE, jwks_cache, clock)
+
+
+@pytest.fixture
+async def oauth_http(request, store, issuer, verifier, tmp_path):
+    mode = getattr(request, "param", "oauth")
+    settings = Settings(
+        KEY if mode == "static+oauth" else None,
+        {"default": "https://hooks.example"},
+        tmp_path,
+        mode,
+        ISSUER,
+        RESOURCE,
+    )
+    async with serve(build_mcp_app(store, settings, verifier)) as client:
+        yield client
