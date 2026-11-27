@@ -751,13 +751,13 @@ merged and a deploy (`docs/release.md`); nothing changes there until the edge se
 
 ## Open questions for the owner
 
-Execution waits on the open ones (1, 2, 4, 5). The plan's provisional answer is in brackets; the tests that pin it
+All questions are resolved (owner, 2026-11-27). The plan's provisional answer is in brackets; the tests that pin it
 are marked.
 
-1. **Is an env var set to the empty string "set"?** This covers `MCP_AUTH_KEY=""` in `oauth`, `OAUTH_*=""` in `static`
+1. **Is an env var set to the empty string "set"?** *Resolved (owner, 2026-11-27): present counts as set, as proposed.* This covers `MCP_AUTH_KEY=""` in `oauth`, `OAUTH_*=""` in `static`
    and `AUTH_MODE=""`. § 6.7 says "set in `oauth`" and "set in `static`" without saying whether that means present or
    non-empty. *[Present counts: all three are refused at start. T1.]*
-2. **Should `scripts/smoke.sh` cover an OAuth mode?** § 6.7 asks for no smoke change. Running the image in `oauth` with
+2. **Should `scripts/smoke.sh` cover an OAuth mode?** *Resolved (owner, 2026-11-27): no smoke change, as proposed.* § 6.7 asks for no smoke change. Running the image in `oauth` with
    a dummy issuer, and checking `POST /mcp` → 401 with `resource_metadata` plus the metadata body, would prove the
    Gatus-facing contract (C1) in the real container. *[No: smoke runs unchanged as the image check. T4 step 6.]*
 3. **Stale keys after `JWKS_MAX_AGE_SECONDS`.** *Answered no (owner, 2026-11-27; SSO spec § 3 "Signing keys", spec
@@ -765,10 +765,10 @@ are marked.
    or the limit blocks it, every token that needs a key gets `IssuerUnavailable` (503), including one whose `kid` is in
    the old set. T2 `test_expired_set_with_refetch_failing_raises`, `test_expired_set_with_refetch_rate_limited_raises`;
    T4 `test_expired_key_set_with_issuer_down_is_503`.
-4. **A JWKS that parses but holds no usable key** (empty `keys`, or keys without a `kid`). § 6.7 lists timeout,
+4. **A JWKS that parses but holds no usable key** *Resolved (owner, 2026-11-27): a failed fetch, as proposed.* (empty `keys`, or keys without a `kid`). § 6.7 lists timeout,
    non-200, oversized and unparsable as failed fetches, not this case. *[It is a failed fetch, so the old set is
    kept, and used only while it is within `JWKS_MAX_AGE_SECONDS` (question 3). T2.]*
-5. **`WWW-Authenticate` and the log reason for a malformed header in an OAuth mode** (`Basic …`, `Bearer ` with
+5. **`WWW-Authenticate` and the log reason for a malformed header in an OAuth mode** *Resolved (owner, 2026-11-27): no `error=` parameter, log reason `invalid`, as proposed.* (`Basic …`, `Bearer ` with
    nothing after it, `bearer <token>`, two `Authorization` headers). The § 6.7 table adds `error="invalid_token"`
    only "for a presented, refused token". *[No `error=` parameter; log reason `invalid`. A well-formed `Bearer
    <x>` that fails verification, including a wrong static key in `static+oauth`, gets `error="invalid_token"`. T4.]*
