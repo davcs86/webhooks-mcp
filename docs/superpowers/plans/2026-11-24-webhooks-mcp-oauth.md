@@ -21,9 +21,10 @@ served by `httpx2.MockTransport`: no network, no wall time.
 Starlette, pytest + pytest-asyncio, ruff.
 
 **Spec:** `docs/superpowers/specs/2026-11-11-webhooks-mcp-design.md` § 6.7 (and § 6.5 for the env), `docs/contracts.md`
-C1 and C4 as amended 2026-11-24. Shared design: homelab-edge `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md`
-(decision 16 as amended, § 4.6, § 5 webhooks-mcp row, § 10 P4) and `docs/runbooks/sso.md` § 6b. The edge's wiring is a
-separate plan in homelab-edge.
+C1 and C4 as amended 2026-11-24 (C1 again 2026-11-27). Shared design: homelab-edge
+`docs/superpowers/specs/2026-11-23-authelia-sso-respec.md` (decisions 16 and 21 as amended, § 3 "Signing keys", § 4.6,
+§ 4.11, § 5 webhooks-mcp row, § 10 P4) and `docs/runbooks/sso.md` § 6b. The edge's wiring is a separate plan in
+homelab-edge.
 
 ## Global Constraints
 
@@ -38,6 +39,9 @@ separate plan in homelab-edge.
   (case-insensitive); a `kid` found in the JWKS and a valid signature; `exp`, `iss`, `aud` present; `iss` ==
   `OAUTH_ISSUER`; `aud` == or containing `OAUTH_RESOURCE`; `exp`/`nbf`/`iat` within `TOKEN_CLOCK_SKEW_SECONDS` by the
   injected clock. PyJWT's `verify_exp`/`verify_nbf`/`verify_iat` are off.
+- Keys only from a set fetched within `JWKS_MAX_AGE_SECONDS`. Once the cached set is older, a token that needs a key
+  triggers a refetch under the shared limit; if it fails, times out or is not allowed, → `IssuerUnavailable` (503) for
+  every token, including one whose `kid` is in the old set. No expired key is ever used.
 - Scopes come from `scp` when present (anything but a list of strings → no scopes, never rescued by `scope`), else from
   the space-delimited `scope` string, else none. Authorization is `REQUIRED_SCOPE in scopes`, nothing else; no subject
   list.
@@ -234,8 +238,8 @@ class JwksCache:
     def __init__(self, issuer: str, client: httpx2.AsyncClient,
                  clock: Callable[[], datetime] = utcnow) -> None
     async def key(self, kid: str) -> jwt.PyJWK | None
-        # the key; None = unknown kid while some key is cached (→ 401);
-        # raises IssuerUnavailable = unknown kid and no key cached (→ 503)
+        # the key; None = kid not in a set fetched within JWKS_MAX_AGE_SECONDS (→ 401);
+        # raises IssuerUnavailable = no set within that age after any allowed fetch (→ 503)
     async def aclose(self) -> None   # closes the client
 
 # tests/mcp_fixtures.py
@@ -318,12 +322,31 @@ async def test_concurrent_lookups_share_one_fetch(jwks_cache, issuer):
     assert all(k.key_id == "k1" for k in await asyncio.gather(*tasks))
     assert issuer.requests == [DISCOVERY, "/jwks"]
 
-async def test_failed_fetch_keeps_cached_keys(jwks_cache, issuer, clock):        # Open question 3
+async def test_failed_fetch_keeps_a_set_within_max_age(jwks_cache, issuer, clock):
     await jwks_cache.key("k1")
-    clock.advance(timedelta(seconds=JWKS_MAX_AGE_SECONDS + 1)); issuer.down = True
+    clock.advance(timedelta(seconds=JWKS_REFETCH_MIN_SECONDS + 1)); issuer.down = True
+    assert await jwks_cache.key("k2") is None                      # a set within max age → 401, not 503
     assert (await jwks_cache.key("k1")).key_id == "k1"
-    clock.advance(timedelta(seconds=JWKS_REFETCH_MIN_SECONDS + 1))
-    assert await jwks_cache.key("k2") is None                      # a key is cached → 401, not 503
+
+@pytest.mark.parametrize("fail", ["down", "timeout"])              # Open question 3: answered no
+async def test_expired_set_with_refetch_failing_raises(jwks_cache, issuer, clock, monkeypatch, fail):
+    await jwks_cache.key("k1")
+    clock.advance(timedelta(seconds=JWKS_MAX_AGE_SECONDS + 1))
+    if fail == "down":
+        issuer.down = True
+    else:
+        monkeypatch.setattr("webhooks_mcp.jwks.JWKS_FETCH_TIMEOUT_SECONDS", 0.05); issuer.delay = 1
+    with pytest.raises(IssuerUnavailable): await jwks_cache.key("k1")     # k1 is in the expired set
+    assert issuer.requests == [DISCOVERY, "/jwks", DISCOVERY]
+
+async def test_expired_set_with_refetch_rate_limited_raises(jwks_cache, issuer, clock):
+    await jwks_cache.key("k1")
+    clock.advance(timedelta(seconds=JWKS_MAX_AGE_SECONDS - 1)); issuer.down = True
+    assert await jwks_cache.key("k2") is None                      # the attempt fails; the set is still in age
+    issuer.down = False
+    clock.advance(timedelta(seconds=2))                            # set expired, last attempt 2 s ago
+    with pytest.raises(IssuerUnavailable): await jwks_cache.key("k1")
+    assert len(issuer.requests) == 3                               # no attempt within the limit
 
 @pytest.mark.parametrize("break_issuer", [            # each is a failed fetch
     lambda i: i.discovery.update(issuer=ISSUER + "/"),
@@ -368,8 +391,9 @@ State: `keys: dict[str, PyJWK]` (empty until the first success), `fetched_at`, `
 `clock().timestamp()`), and one `asyncio.Lock`. `key(kid)` returns at once, with no lock, when `kid` is cached and
 `now - fetched_at < JWKS_MAX_AGE_SECONDS`. Otherwise it takes the lock and re-checks. It then attempts a fetch only
 when `last_attempt` is unset or `now - last_attempt >= JWKS_REFETCH_MIN_SECONDS`, and sets `last_attempt = now`
-before the first await. A success replaces `keys` and `fetched_at`; a failure keeps them. The result:
-`keys.get(kid)`, else `None` if `keys`, else `raise IssuerUnavailable`.
+before the first await. A success replaces `keys` and sets `fetched_at = now`; a failure leaves both as they were.
+The result: `raise IssuerUnavailable` unless `keys` is non-empty and `now - fetched_at < JWKS_MAX_AGE_SECONDS`;
+otherwise `keys.get(kid)` (`None` when absent). No path returns a key from an expired set.
 
 One attempt is `GET <issuer>/.well-known/openid-configuration`, then `GET <jwks_uri>`. Each request runs inside
 `asyncio.timeout(JWKS_FETCH_TIMEOUT_SECONDS)` through `client.stream("GET", url)` (redirects not followed). It reads
@@ -639,11 +663,19 @@ async def test_refusals_log_mode_and_reason_only(oauth_http, issuer, clock, capl
     bad = issuer.token(aud="https://x.example", sub="sub-secret-7")
     unscoped = issuer.token(scp=["other"], sub="sub-secret-7")
     # POST without credentials, with `bad`, with `unscoped`; then issuer.down on a fresh kid
-    # (issuer.token(header={"kid": "k9"})) after advancing the clock past JWKS_REFETCH_MIN_SECONDS → 401 (a key is cached)
+    # (issuer.token(header={"kid": "k9"})) after advancing the clock past JWKS_REFETCH_MIN_SECONDS → 401
+    # (the cached set is within JWKS_MAX_AGE_SECONDS)
     assert [r.getMessage() for r in caplog.records if r.name == "webhooks_mcp.mcp_app"] == [
         "mcp auth refused: mode=oauth reason=missing", "mcp auth refused: mode=oauth reason=invalid",
         "mcp auth refused: mode=oauth reason=scope", "mcp auth refused: mode=oauth reason=invalid"]
     assert not any(s in caplog.text for s in (bad, unscoped, KEY, "sub-secret-7"))
+
+async def test_expired_key_set_with_issuer_down_is_503(oauth_http, issuer, clock):   # Open question 3: answered no
+    ok = await oauth_http.post("/mcp", json=INIT, headers={**MCP_HEADERS, "Authorization": f"Bearer {issuer.token()}"})
+    assert ok.status_code == 200
+    clock.advance(timedelta(seconds=JWKS_MAX_AGE_SECONDS + 1)); issuer.down = True
+    r = await oauth_http.post("/mcp", json=INIT, headers={**MCP_HEADERS, "Authorization": f"Bearer {issuer.token()}"})
+    assert (r.status_code, r.json()) == (503, {"error": "issuer unavailable"}) and "www-authenticate" not in r.headers
 
 async def test_issuer_unavailable_is_logged(oauth_http, issuer, caplog):
     # issuer.down, no key cached → 503 and one message "mcp auth refused: mode=oauth reason=issuer_unavailable"
@@ -693,7 +725,7 @@ Expected: PASS.
     the OAuth bullet: issuer + audience + `webhooks-mcp` scope, no subject list, tokens never logged.
   - `docs/contracts.md` C1 and C4: delete ", not built" from "(spec 6.7, not built; …)" and "(spec 6.5, 6.7, not built)".
     No value changes.
-  - Spec § 6.7 heading: `(amended 2026-11-24, not built)` → `(amended 2026-11-24)`.
+  - Spec § 6.7 heading: `(amended 2026-11-24 and 2026-11-27, not built)` → `(amended 2026-11-24 and 2026-11-27)`.
 
 - [ ] **Step 6: Run the whole check** (the CI invocation, then the image)
 
@@ -719,7 +751,8 @@ merged and a deploy (`docs/release.md`); nothing changes there until the edge se
 
 ## Open questions for the owner
 
-Execution waits on these. The plan's provisional answer is in brackets; the tests that pin it are marked.
+Execution waits on the open ones (1, 2, 4, 5, 6). The plan's provisional answer is in brackets; the tests that pin it
+are marked.
 
 1. **Is an env var set to the empty string "set"?** This covers `MCP_AUTH_KEY=""` in `oauth`, `OAUTH_*=""` in `static`
    and `AUTH_MODE=""`. § 6.7 says "set in `oauth`" and "set in `static`" without saying whether that means present or
@@ -727,14 +760,20 @@ Execution waits on these. The plan's provisional answer is in brackets; the test
 2. **Should `scripts/smoke.sh` cover an OAuth mode?** § 6.7 asks for no smoke change. Running the image in `oauth` with
    a dummy issuer, and checking `POST /mcp` → 401 with `resource_metadata` plus the metadata body, would prove the
    Gatus-facing contract (C1) in the real container. *[No: smoke runs unchanged as the image check. T4 step 6.]*
-3. **Stale keys after `JWKS_MAX_AGE_SECONDS`.** When the refresh fails or the refetch limit blocks it, a token signed
-   by a still-cached but expired key is accepted ("a failed fetch keeps the cached keys"). The other reading of
-   "cached … for `JWKS_MAX_AGE_SECONDS`" treats an expired key as not cached (→ 401/503). *[Expired keys stay usable
-   until a refresh succeeds. T2 `test_failed_fetch_keeps_cached_keys`.]*
+3. **Stale keys after `JWKS_MAX_AGE_SECONDS`.** *Answered no (owner, 2026-11-27; SSO spec § 3 "Signing keys", spec
+   § 6.7 Keys):* a key from a set older than `JWKS_MAX_AGE_SECONDS` is never used. When the refetch fails, times out
+   or the limit blocks it, every token that needs a key gets `IssuerUnavailable` (503), including one whose `kid` is in
+   the old set. T2 `test_expired_set_with_refetch_failing_raises`, `test_expired_set_with_refetch_rate_limited_raises`;
+   T4 `test_expired_key_set_with_issuer_down_is_503`.
 4. **A JWKS that parses but holds no usable key** (empty `keys`, or keys without a `kid`). § 6.7 lists timeout,
-   non-200, oversized and unparsable as failed fetches, not this case. *[It is a failed fetch, so the old keys are
-   kept. T2.]*
+   non-200, oversized and unparsable as failed fetches, not this case. *[It is a failed fetch, so the old set is
+   kept, and used only while it is within `JWKS_MAX_AGE_SECONDS` (question 3). T2.]*
 5. **`WWW-Authenticate` and the log reason for a malformed header in an OAuth mode** (`Basic …`, `Bearer ` with
    nothing after it, `bearer <token>`, two `Authorization` headers). The § 6.7 table adds `error="invalid_token"`
    only "for a presented, refused token". *[No `error=` parameter; log reason `invalid`. A well-formed `Bearer
    <x>` that fails verification, including a wrong static key in `static+oauth`, gets `error="invalid_token"`. T4.]*
+6. **Revocation if S27 needs opaque tokens.** SSO spec § 4.11 needs no change here for C (edge config), nor for A
+   while Authelia's bearer authz accepts the JWT access tokens this service verifies; spike S27 records whether A also
+   needs opaque tokens. If A works only with opaque `authelia_at_` tokens, `JwksTokenVerifier` cannot verify them and
+   the design changes (introspection, or trusting the edge's check): an owner decision then, not now. *[No change: the
+   plan builds the JWT verifier as specified.]*
