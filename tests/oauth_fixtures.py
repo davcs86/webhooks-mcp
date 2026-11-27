@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 from webhooks_mcp.jwks import JwksCache
+from webhooks_mcp.token_verifier import JwksTokenVerifier
 
 ISSUER = "https://auth.example"
 RESOURCE = "https://wm.example/mcp"
@@ -97,3 +98,8 @@ async def jwks_cache(issuer, clock):
     cache = JwksCache(ISSUER, client, clock)
     yield cache
     await cache.aclose()
+
+
+@pytest.fixture
+def verifier(jwks_cache, clock) -> JwksTokenVerifier:
+    return JwksTokenVerifier(ISSUER, RESOURCE, jwks_cache, clock)
