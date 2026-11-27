@@ -101,6 +101,10 @@ def test_issuer_keeps_its_path_verbatim():
                 "auth.example",
                 "https://",
                 "https://exa mple",
+                " https://auth.example",
+                "https://auth.example\n",
+                "https://auth.example/ ",
+                "https://auth.ex\tample",
             )
         ],
         *[
@@ -116,6 +120,8 @@ def test_issuer_keeps_its_path_verbatim():
                 "https://wm.example/mcp?",
                 "https://wm.example/mcp#",
                 "https://wm ex/mcp",
+                "https://wm.example/mcp\n",
+                "https://wm.example/m\tcp",
             )
         ],
     ],

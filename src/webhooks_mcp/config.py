@@ -61,6 +61,9 @@ class Settings:
 
 
 def _https_parts(raw: str, var: str):
+    # urlsplit and pydantic drop whitespace and controls; the raw value is compared verbatim.
+    if any(c.isspace() or not c.isprintable() for c in raw):
+        raise ConfigError(f"{var} must not contain whitespace or control characters")
     try:
         parts = urlsplit(raw)
     except ValueError:

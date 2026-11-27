@@ -114,6 +114,10 @@ async def test_expired_set_with_refetch_rate_limited_raises(jwks_cache, issuer, 
         lambda i: i.override.update({DISCOVERY: httpx2.Response(200, json=["not", "an", "obj"])}),
         lambda i: i.override.update({"/jwks": httpx2.Response(200, json={"keys": []})}),
         lambda i: i.jwks["keys"][0].pop("kid"),
+        lambda i: i.discovery.update(jwks_uri="https://auth.example/j\u0001"),
+        lambda i: i.override.update(
+            {DISCOVERY: httpx2.Response(200, content=b"[" * 30000 + b"]" * 30000)}
+        ),
     ],
 )
 async def test_bad_issuer_responses_are_failed_fetches(jwks_cache, issuer, break_issuer):
@@ -142,3 +146,18 @@ async def test_fetch_timeout_is_a_failed_fetch(jwks_cache, issuer, monkeypatch):
     issuer.delay = 1
     with pytest.raises(IssuerUnavailable):
         await jwks_cache.key("k1")
+
+
+@pytest.mark.parametrize("jwks_uri", ["https://AUTH.example/jwks", "https://auth.example:443/jwks"])
+async def test_jwks_uri_on_the_same_origin_is_accepted(jwks_cache, issuer, jwks_uri):
+    issuer.discovery["jwks_uri"] = jwks_uri
+    assert (await jwks_cache.key("k1")).key_id == "k1"
+
+
+async def test_backward_clock_step_never_extends_the_set(jwks_cache, issuer, clock):
+    await jwks_cache.key("k1")
+    clock.advance(timedelta(seconds=-2 * JWKS_MAX_AGE_SECONDS))
+    issuer.down = True
+    with pytest.raises(IssuerUnavailable):
+        await jwks_cache.key("k1")
+    assert issuer.requests == [DISCOVERY, "/jwks", DISCOVERY]

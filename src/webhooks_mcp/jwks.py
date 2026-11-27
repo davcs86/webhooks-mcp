@@ -41,7 +41,7 @@ class JwksCache:
         return (
             bool(self._keys)
             and self._fetched_at is not None
-            and now - self._fetched_at < JWKS_MAX_AGE_SECONDS
+            and 0 <= now - self._fetched_at < JWKS_MAX_AGE_SECONDS
         )
 
     async def key(self, kid: str) -> jwt.PyJWK | None:
@@ -52,14 +52,19 @@ class JwksCache:
             now = self._clock().timestamp()
             if kid in self._keys and self._in_age(now):
                 return self._keys[kid]
-            if self._last_attempt is None or now - self._last_attempt >= JWKS_REFETCH_MIN_SECONDS:
+            if (
+                self._last_attempt is None
+                or not 0 <= now - self._last_attempt < JWKS_REFETCH_MIN_SECONDS
+            ):
                 self._last_attempt = now
                 try:
                     keys = await self._fetch()
                 except (
                     httpx2.HTTPError,
+                    httpx2.InvalidURL,
                     TimeoutError,
                     ValueError,
+                    RecursionError,
                     jwt.PyJWTError,
                     _FetchFailed,
                 ):
@@ -91,8 +96,11 @@ class JwksCache:
         jwks_uri = discovery.get("jwks_uri")
         if not isinstance(jwks_uri, str):
             raise _FetchFailed
-        parts = urlsplit(jwks_uri)
-        if parts.scheme != "https" or parts.netloc != urlsplit(self._issuer).netloc:
+        parts, origin = urlsplit(jwks_uri), urlsplit(self._issuer)
+        if parts.scheme != "https" or (parts.hostname, parts.port or 443) != (
+            origin.hostname,
+            origin.port or 443,
+        ):
             raise _FetchFailed
         doc = await self._get_json(jwks_uri)
         if not isinstance(doc, dict):

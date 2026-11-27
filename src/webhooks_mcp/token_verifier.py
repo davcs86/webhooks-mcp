@@ -59,7 +59,7 @@ class JwksTokenVerifier:
             or not kid
         ):
             return None
-        key = await self._keys.key(kid)  # IssuerUnavailable propagates (→ 503)
+        key = await self._keys.key(kid)
         if key is None:
             return None
         try:
