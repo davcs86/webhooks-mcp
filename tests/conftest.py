@@ -6,6 +6,9 @@ import pytest
 from webhooks_mcp.ingest_app import build_ingest_app
 from webhooks_mcp.store import EventStore
 
+# Test modules import names from these opt-in plugins; rewrite them before that import.
+pytest.register_assert_rewrite("mcp_fixtures", "oauth_fixtures")
+
 
 class FakeClock:
     def __init__(self) -> None:

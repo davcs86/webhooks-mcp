@@ -1,7 +1,10 @@
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import httpx
 import pytest
+from starlette.applications import Starlette
 
 from webhooks_mcp.config import Settings
 from webhooks_mcp.mcp_app import build_mcp_app
@@ -23,9 +26,8 @@ def auth() -> dict[str, str]:
     return {"Authorization": f"Bearer {KEY}"}
 
 
-@pytest.fixture
-async def mcp_http(store, settings):
-    app = build_mcp_app(store, settings)
+@asynccontextmanager
+async def serve(app: Starlette) -> AsyncIterator[httpx.AsyncClient]:
     started, stop = asyncio.Event(), asyncio.Event()
 
     # The session manager's task group must be entered and exited in the same task.
@@ -45,3 +47,9 @@ async def mcp_http(store, settings):
         yield client
     stop.set()
     await task
+
+
+@pytest.fixture
+async def mcp_http(store, settings):
+    async with serve(build_mcp_app(store, settings)) as client:
+        yield client
