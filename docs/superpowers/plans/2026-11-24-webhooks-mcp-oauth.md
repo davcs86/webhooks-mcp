@@ -751,7 +751,7 @@ merged and a deploy (`docs/release.md`); nothing changes there until the edge se
 
 ## Open questions for the owner
 
-Execution waits on the open ones (1, 2, 4, 5, 6). The plan's provisional answer is in brackets; the tests that pin it
+Execution waits on the open ones (1, 2, 4, 5). The plan's provisional answer is in brackets; the tests that pin it
 are marked.
 
 1. **Is an env var set to the empty string "set"?** This covers `MCP_AUTH_KEY=""` in `oauth`, `OAUTH_*=""` in `static`

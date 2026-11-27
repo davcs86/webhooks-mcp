@@ -310,7 +310,7 @@ clients' exact issuer match. Unauthenticated; homelab-edge proxies that path on 
 whose `issuer` differs from `OAUTH_ISSUER`, or whose `jwks_uri` is not `https:` on the issuer's origin, is a failed
 fetch **(call)**. The discovery document and the keys are fetched together, lazily by the first token that needs a key,
 and replaced together by each successful fetch. A token is verified only with a key from a key set fetched within the
-last `JWKS_MAX_AGE_SECONDS` (constant, 3600: one access-token lifetime, matching the edge's JWKS rotation, SSO spec
+last `JWKS_MAX_AGE_SECONDS` (constant, 3600: the edge's JWKS rotation wait, SSO spec
 § 4.7 "Rotation runbook"); no expired key is ever used (owner, 2026-11-27, SSO spec § 3 "Signing keys"). A token that
 needs a key triggers a fetch when the cached set is older than that, or when its `kid` is not in the set. Every fetch
 attempt (the first, the refresh after expiry, the one on an unknown `kid`, a retry after a failure) shares one limit, at
