@@ -751,7 +751,7 @@ merged and a deploy (`docs/release.md`); nothing changes there until the edge se
 
 ## Open questions for the owner
 
-All questions are resolved (owner, 2026-11-27). The plan's provisional answer is in brackets; the tests that pin it
+All questions are resolved (owner, 2026-11-27). The bracketed answer is the one adopted; the tests that pin it
 are marked.
 
 1. **Is an env var set to the empty string "set"?** *Resolved (owner, 2026-11-27): present counts as set, as proposed.* This covers `MCP_AUTH_KEY=""` in `oauth`, `OAUTH_*=""` in `static`
