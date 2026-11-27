@@ -772,8 +772,6 @@ are marked.
    nothing after it, `bearer <token>`, two `Authorization` headers). The § 6.7 table adds `error="invalid_token"`
    only "for a presented, refused token". *[No `error=` parameter; log reason `invalid`. A well-formed `Bearer
    <x>` that fails verification, including a wrong static key in `static+oauth`, gets `error="invalid_token"`. T4.]*
-6. **Revocation if S27 needs opaque tokens.** SSO spec § 4.11 needs no change here for C (edge config), nor for A
-   while Authelia's bearer authz accepts the JWT access tokens this service verifies; spike S27 records whether A also
-   needs opaque tokens. If A works only with opaque `authelia_at_` tokens, `JwksTokenVerifier` cannot verify them and
-   the design changes (introspection, or trusting the edge's check): an owner decision then, not now. *[No change: the
-   plan builds the JWT verifier as specified.]*
+6. **Revocation.** *Resolved (owner, 2026-11-27):* SSO spec § 4.11 chose C (5-minute access tokens for the Claude.ai
+   client, revocation through `sso_people`); spike S27 showed Authelia's bearer check accepts only opaque tokens, so A
+   was rejected. Nothing changes here: the plan builds the JWT verifier as specified.

@@ -242,11 +242,12 @@ RS256 JWT access tokens works.
 scope only, and keeps no list of subjects. Who can get such a token is decided at the issuer: on the edge, membership of
 Authelia's `webhooks-mcp` group for its one client, `webhooks-mcp-claude` (Claude.ai's connector; SSO spec decisions 16
 and 21 as amended, § 4.6). Accepted residuals: an issuer client misconfigured to hold that scope and audience is not
-caught here; and a person removed from the group keeps an issued access token until its `exp` (1 h on the edge, 5 min under SSO spec § 4.11 C; at once under A), and
-keeps refreshing for as long as the issuer allows: Authelia v4.39.28 kept refreshing after removal from the group
-(xstockstrat 345 spike (d), `context.md`; SSO spec S4, S24). The edge closes that gap without a change here (SSO spec
-§ 4.11): by Authelia's bearer check in front of `/mcp` in `oauth` (A, provided S27 shows it accepts the JWT access
-tokens this service verifies), or by 5-minute access tokens (C).
+caught here; and a person removed from the group keeps an issued access token until its `exp` (5 min on the edge, SSO
+spec § 4.11) and keeps refreshing for as long as the issuer allows: Authelia v4.39.28 kept refreshing after removal from
+the group (xstockstrat 345 spike (d), `context.md`; SSO spec S4). The edge closes that gap without a change here (SSO
+spec § 4.11, owner 2026-11-27): the Claude.ai client's access tokens live 5 min, and revocation is removing
+`david_claude` from `sso_people`, which stops its refresh (S24). Authelia's bearer check was rejected (S27: it accepts
+only opaque tokens, which this service cannot verify).
 
 **Request check.** `McpEndpoint` stays the one place a request is accepted or refused **(call)**. It does not use the
 SDK's `BearerAuthBackend`/`RequireAuthMiddleware`: that backend matches the scheme case-insensitively (WM-08 requires the
