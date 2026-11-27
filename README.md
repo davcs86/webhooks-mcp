@@ -8,7 +8,7 @@ One process, two listeners:
 
 | Listener | Port | Serves |
 |---|---|---|
-| MCP | 9100 | `POST /mcp` (Streamable HTTP, bearer key), `GET /healthz` |
+| MCP | 9100 | `POST /mcp` (Streamable HTTP, bearer key or OAuth access token per `AUTH_MODE`), `GET /healthz`; in the OAuth modes `GET /.well-known/oauth-protected-resource/mcp` |
 | Ingest | 9101 | `POST /hooks`, `POST /hooks/{name}`, `GET /healthz` |
 
 ## Ingestion (port 9101)
@@ -41,7 +41,19 @@ curl -X POST http://127.0.0.1:9101/hooks/minted.demo-k7q2xw4mzr3p -d '{"any":"js
 
 ## MCP tools (port 9100)
 
-Every request needs `Authorization: Bearer <MCP_AUTH_KEY>`; otherwise 401.
+Every request needs `Authorization: Bearer <credential>`; which credentials are accepted depends on `AUTH_MODE`:
+
+| `AUTH_MODE` | Accepted on `POST /mcp` | Protected resource metadata |
+|---|---|---|
+| `static` (default) | `Bearer <MCP_AUTH_KEY>` only | 404 |
+| `static+oauth` | the static key, or an access token as below | served |
+| `oauth` | an access token only | served |
+
+An access token is an RS256 JWT (`typ` `at+jwt`) from `OAUTH_ISSUER`, with `aud` `OAUTH_RESOURCE` and the
+`webhooks-mcp` scope. Without credentials, or with a refused one: 401 `{"error": "unauthorized"}`; in the OAuth modes
+`WWW-Authenticate` names the metadata URL (`GET /.well-known/oauth-protected-resource/mcp`, RFC 9728). A valid token
+without the scope: 403 `{"error": "insufficient_scope"}`. A token that needs a key while the issuer's keys cannot be
+fetched and none fetched within the last hour are cached: 503 `{"error": "issuer unavailable"}`.
 
 | Tool | Purpose |
 |---|---|
@@ -59,9 +71,14 @@ fetched with `get_event`. Pass `next_after_seq` back as `after_seq` to page. Rea
 
 | Env var | Meaning |
 |---|---|
-| `MCP_AUTH_KEY` | Bearer key, at least 32 characters. The process exits with status 2 if it is missing or short |
+| `AUTH_MODE` | `static` (default) \| `static+oauth` \| `oauth`; any other value is refused at start |
+| `MCP_AUTH_KEY` | Bearer key, at least 32 characters. Required in `static` and `static+oauth`, refused in `oauth` |
+| `OAUTH_ISSUER` | Required in the OAuth modes, refused otherwise: the token issuer, compared to `iss` as an exact string; `https:`, no trailing slash, query or fragment |
+| `OAUTH_RESOURCE` | Required in the OAuth modes, refused otherwise: this server's resource URL, the expected `aud` and the protected resource metadata's `resource`; `https:`, path exactly `/mcp`, no query or fragment |
 | `INGEST_BASE_URLS` | JSON object of label to base URL used to build minted URLs; must contain `default`, e.g. `{"default":"http://127.0.0.1:9101"}` |
 | `DATA_DIR` | Directory for the SQLite database (`events.db`). Default `/data`; must exist and be writable |
+
+The process exits with status 2, naming the variable, on any refused configuration.
 
 ## Retention
 
@@ -101,6 +118,9 @@ docker run -d --name wm --read-only --cap-drop ALL --security-opt no-new-privile
 
 - **MCP**: bearer key compared in constant time; the key is never logged. The MCP port is the only one
   that may be exposed beyond a private network, behind TLS.
+- **OAuth** (`static+oauth`, `oauth`): a token is accepted by issuer, audience and the `webhooks-mcp` scope only; there
+  is no subject list, so who may get such a token is decided at the issuer. Tokens and their claims are never logged;
+  a refusal logs only the mode and a fixed reason. Startup never contacts the issuer.
 - **Ingestion has no authentication, by design.** Publish port 9101 only to a private network such as
   a tailnet. Minted names carry a random suffix and expire, but they are not secrets worth relying on.
 - **Payloads are untrusted third-party data.** They are returned only inside a `payload` field, and

@@ -224,7 +224,7 @@ Reads never delete: an event can be read any number of times until it expires.
   timing out, TTL and per-name trimming, 401 without or with a wrong key, and the ingest routes being
   absent from the MCP port (and the reverse). The OAuth modes add the cases in 6.7, run against a stub issuer.
 
-### 6.7 MCP authentication modes (amended 2026-11-24 and 2026-11-27, not built)
+### 6.7 MCP authentication modes (amended 2026-11-24 and 2026-11-27)
 
 | `AUTH_MODE` | Accepted on `POST /mcp` | Protected resource metadata |
 |---|---|---|

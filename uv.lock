@@ -770,7 +770,9 @@ name = "webhooks-mcp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "httpx2" },
     { name = "mcp" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "starlette" },
     { name = "uvicorn" },
 ]
@@ -786,7 +788,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", marker = "extra == 'dev'" },
+    { name = "httpx2" },
     { name = "mcp", specifier = ">=2.3,<3" },
+    { name = "pyjwt", extras = ["crypto"] },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },

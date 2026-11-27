@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Stores webhooks POSTed to it and serves them to AI agents over MCP"
 requires-python = ">=3.13"
 dependencies = [
+    "httpx2",
     "mcp>=2.3,<3",
+    "pyjwt[crypto]",
     "starlette",
     "uvicorn",
 ]
