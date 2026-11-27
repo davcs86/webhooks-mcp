@@ -168,7 +168,11 @@ def _cli(env, **kw):
 
 @pytest.mark.parametrize(
     ("env", "var"),
-    [({}, "MCP_AUTH_KEY"), ({**GOOD, "INGEST_BASE_URLS": "x"}, "INGEST_BASE_URLS")],
+    [
+        ({}, "MCP_AUTH_KEY"),
+        ({**GOOD, "INGEST_BASE_URLS": "x"}, "INGEST_BASE_URLS"),
+        ({**GOOD, "AUTH_MODE": "bogus"}, "AUTH_MODE"),
+    ],
 )
 def test_cli_exits_2_naming_variable_on_bad_env(env, var):
     p = _cli(env)
